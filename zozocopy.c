@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
 
 //long targetFileCount = 1347375; //the aim is to process 1347375 files in a reasonable speed
 //char devFilePath[] = "/dev/nvme0n1p2";
@@ -30,25 +31,30 @@ void getFileInfo(char sourcePath[]){
     stat(sourcePath, &filePathStatBuf);
     
     //print stats
-    printf("\nFile size: %d", filePathStatBuf.st_size);
+    
+    printf(" aTime (Access): %ld, %lu\n", filePathStatBuf.st_atime, filePathStatBuf.st_atim.tv_nsec);
+    printf(" mTime (Modify): %ld, %lu\n", filePathStatBuf.st_mtime, filePathStatBuf.st_mtim.tv_nsec);
+    printf(" cTime (Change): %ld, %lu\n", filePathStatBuf.st_ctime, filePathStatBuf.st_ctim.tv_nsec);
+    printf("crTime (Birth) : ????, ????\n");
+
 }
 
 void travelDirectory(char sourcePath[]){        
     //ensure source path ends with the os seperator
-    ensureOsSep(sourcePath);
-    getFileInfo(sourcePath);
+    ensureOsSep(sourcePath);    
     
     //https://iq.opengenus.org/traversing-folders-in-c/    
     DIR *sourceDir = opendir(sourcePath); //get sourceDir as a pointer to a DIR struct from sourceFolder string. returns DIR upon success, NULL upon failure
     struct dirent *dp; 
-    char* file_name;  //define the filename variable
-    
+    char* file_name;  //define the filename variable    
     struct stat filePathStatBuf;
+    
+    //declare and initialise a variable that will store the sourcepath + filename
+    //should implement hannahs suggestion for dynamic allocation
     char filePath[1000];    
 
-    // opendir returns NULL if couldn't open directory 
-    if (!sourceDir)
-        return;
+    //if sourcedir is not a directory, exit 
+    if (!sourceDir) return;
 
     //loop through every file under sourcePath
     while ((dp=readdir(sourceDir)) != NULL) {        
@@ -67,11 +73,11 @@ void travelDirectory(char sourcePath[]){
         stat(filePath, &filePathStatBuf);
         if (S_ISDIR(filePathStatBuf.st_mode)){
             //if it is a directory
+            getFileInfo(sourcePath);
             travelDirectory(filePath);
         } else {
             //if it is a filepath
             getFileInfo(filePath);
-            //printf("\033[34m%s\033[0m\n", filePath);
         }        
     }
     closedir(sourceDir); //closes the sourceDir DIR struct
@@ -79,11 +85,12 @@ void travelDirectory(char sourcePath[]){
 
 int main() {
     //ensure last character of source folder is the os seperator
+    //char sourceFolder[] =  "/home/zoey/Desktop/source";
     char sourceFolder[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
     ensureOsSep(sourceFolder);
     
     //ensure the last character of dest folder is the os seperator
-    char destFolder[] = "/home/zoey/Desktop/test";
+    char destFolder[] = "/home/zoey/Desktop/test";    
     ensureOsSep(destFolder);
     
     //recursively itterate through every file and folder in source directory, printing out the names of all directories and files, including source directory
