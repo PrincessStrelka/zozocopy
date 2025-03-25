@@ -1,10 +1,10 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
-#include <stdio.h>
-#include <unistd.h>
 #include <sys/stat.h>
-#include <time.h>
+#include <stdbool.h>
+
+#define nullptr NULL
 
 //long targetFileCount = 1347375; //the aim is to process 1347375 files in a reasonable speed
 //char devFilePath[] = "/dev/nvme0n1p2";
@@ -23,20 +23,19 @@ void ensureOsSep(char *s){
     }
 }
 
-void getFileInfo(char sourcePath[]){
-    printf("\033[34m%s\033[0m\n", sourcePath);
-    
-    //get stats
+void getFileInfo(char filename[]){
+    printf("\033[34m%s\033[0m\n", filename);
     struct stat filePathStatBuf;
-    stat(sourcePath, &filePathStatBuf);
+    stat(filename, &filePathStatBuf);        
     
-    //print stats
+    //find crtime
+    long crTime = -1;
+    long crTime_ns = -1;
     
     printf(" aTime (Access): %ld, %lu\n", filePathStatBuf.st_atime, filePathStatBuf.st_atim.tv_nsec);
     printf(" mTime (Modify): %ld, %lu\n", filePathStatBuf.st_mtime, filePathStatBuf.st_mtim.tv_nsec);
     printf(" cTime (Change): %ld, %lu\n", filePathStatBuf.st_ctime, filePathStatBuf.st_ctim.tv_nsec);
-    printf("crTime (Birth) : ????, ????\n");
-
+    printf("crTime (Birth ): %ld, %lu\n", crTime, crTime_ns);
 }
 
 void travelDirectory(char sourcePath[]){        
@@ -44,7 +43,7 @@ void travelDirectory(char sourcePath[]){
     ensureOsSep(sourcePath);    
     
     //https://iq.opengenus.org/traversing-folders-in-c/    
-    DIR *sourceDir = opendir(sourcePath); //get sourceDir as a pointer to a DIR struct from sourceFolder string. returns DIR upon success, NULL upon failure
+    DIR *sourceDir = opendir(sourcePath); //get sourceDir as a pointer to a DIR struct from filename string. returns DIR upon success, NULL upon failure
     struct dirent *dp; 
     char* file_name;  //define the filename variable    
     struct stat filePathStatBuf;
@@ -85,17 +84,18 @@ void travelDirectory(char sourcePath[]){
 
 int main() {
     //ensure last character of source folder is the os seperator
-    //char sourceFolder[] =  "/home/zoey/Desktop/source";
-    char sourceFolder[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
-    ensureOsSep(sourceFolder);
+    char filename[] =  "/home/zoey/Desktop/source";
+    //char filename[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
+    ensureOsSep(filename);
+    //getFileInfo(filename);
     
     //ensure the last character of dest folder is the os seperator
     char destFolder[] = "/home/zoey/Desktop/test";    
     ensureOsSep(destFolder);
     
     //recursively itterate through every file and folder in source directory, printing out the names of all directories and files, including source directory
-    printf("Copying from \"%s\" to \"%s\"\n", sourceFolder, destFolder);
-    travelDirectory(sourceFolder);    
+    printf("Copying from \"%s\" to \"%s\"\n", filename, destFolder);
+    travelDirectory(filename);    
     return 0;
 } 
 
