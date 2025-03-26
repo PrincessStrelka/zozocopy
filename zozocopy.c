@@ -1,3 +1,5 @@
+// https://iq.opengenus.org/traversing-folders-in-c/
+
 #include <dirent.h>
 // #include <fcntl.h>
 #include <linux/stat.h>
@@ -13,8 +15,14 @@
 #include <ctype.h>
 #include <errno.h>
 #include <linux/fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/syscall.h>
+#include <time.h>
+
+#include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 // my global variables
@@ -30,42 +38,6 @@ void bitwisePrint(unsigned int var) {
                 temp = temp << 1;
         }
 }
-
-void getFileInfo(char path[]) {
-        printf("\033[34m%s\033[0m\n", path);
-        // fill in the parameters for statx call, and call it
-        struct statx stxBuf;
-
-        // print the file we are statting, and the return code from calling statx
-        printf("statx result: %i\n",
-               statx(AT_FDCWD,
-                     *path,
-                     AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
-                     STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
-                     &stxBuf));
-
-        // print the stx mask result
-        printf("stx_mask: ");
-        bitwisePrint(stxBuf.stx_mask);
-        printf("\n");
-
-        // get stat struct for path
-        struct stat statBuf;
-        stat(path, &statBuf);
-
-        // print stats
-        printf(" aTime (Access): %ld, %lu\n", statBuf.st_atime, statBuf.st_atim.tv_nsec);
-        printf(" mTime (Modify): %ld, %lu\n", statBuf.st_mtime, statBuf.st_mtim.tv_nsec);
-        printf(" cTime (Change): %ld, %lu\n", statBuf.st_ctime, statBuf.st_ctim.tv_nsec);
-        // if the stx buffer contains btime, print btime, else dont
-        printf("crTime (Birth ): ");
-        if (stxBuf.stx_mask & STATX_BTIME)
-                printf("%lld, %u", stxBuf.stx_btime.tv_sec, stxBuf.stx_btime.tv_nsec);
-        else
-                printf("-");
-        printf("\n");
-}
-
 void addChar(char *s, char c) {
         // https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
         while (*s++)
@@ -73,21 +45,113 @@ void addChar(char *s, char c) {
         *(s - 1) = c; // Append the new character
         *s = '\0';    // Add null terminator to mark new end
 }
-
-void ensureOsSep(char *s) {
+void ensureOsSeperator(char *s) {
         if (s[strlen(s) - 1] != osSep) {
                 addChar(s, osSep);
         }
 }
+void intToStr(int N, char *str) {
+https: // www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
+        int i = 0;
 
-void travelDirectory(char sourcePath[]) {
-        // ensure source path ends with the os seperator
-        ensureOsSep(sourcePath);
+        // Save the copy of the number for sign
+        int sign = N;
 
-        // https://iq.opengenus.org/traversing-folders-in-c/
-        DIR *sourceDir = opendir(sourcePath); // get sourceDir as a pointer to a DIR
-                                              // struct from filename string. returns
-                                              // DIR upon success, NULL upon failure
+        // If the number is negative, make it positive
+        if (N < 0)
+                N = -N;
+
+        // Extract digits from the number and add them to the
+        // string
+        while (N > 0) {
+
+                // Convert integer digit to character and store
+                // it in the str
+                str[i++] = N % 10 + '0';
+                N /= 10;
+        }
+
+        // If the number was negative, add a minus sign to the
+        // string
+        if (sign < 0) {
+                str[i++] = '-';
+        }
+
+        // Null-terminate the string
+        str[i] = '\0';
+
+        // Reverse the string to get the correct order
+        for (int j = 0, k = i - 1; j < k; j++, k--) {
+                char temp = str[j];
+                str[j] = str[k];
+                str[k] = temp;
+        }
+}
+void printTime(char label[], unsigned int mask, unsigned int maskConst, struct statx_timestamp timestamp) {
+        if (mask & maskConst) {
+                // get times from timestamp
+                signed long long tv_epoch = timestamp.tv_sec;
+                unsigned int tv_nsec = timestamp.tv_nsec;
+
+                // get times for set inode field
+                long long adjusted = tv_epoch + 2147483648;
+                signed long long sif_time = (adjusted % 4294967296) - 2147483648;
+
+                // get rid of the last two bits
+                // shift it over by two bits
+                // store the multiplier in the lower two bits
+                unsigned int sif_extra = (tv_nsec << 2) + floor(adjusted / 4294967296);
+
+                // get epoch as a formatted string
+                struct tm tm;
+                char dateStr[255];
+                char epochAsstr[10];
+                intToStr(timestamp.tv_sec, epochAsstr);
+                memset(&tm, 0, sizeof(struct tm));
+                strptime(epochAsstr, "%s", &tm);
+                strftime(dateStr, sizeof(dateStr), "%Y-%m-%d %H:%M:%S", &tm);
+
+                // print time data
+                printf("%s: %s.%u | %lld %u\n", label, dateStr, tv_nsec, sif_time, sif_extra);
+
+        } else
+                printf("%s: -\n", label);
+}
+
+void copyPath(char path[]) {
+        // fill in the parameters for statx call, and call it
+        struct statx stxBuf;
+
+        // print the file we are statting, and the return code from calling statx
+        printf("\033[34m%s\033[0m\n", path);
+        int stxFlags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC;
+        unsigned int stxMask = STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE;
+        int ret = statx(AT_FDCWD, path, stxFlags, stxMask, &stxBuf);
+        printf("statx result: %i\n", ret);
+        if (ret < 0)
+                return;
+
+        // print the stx mask result
+        printf("stx_mask: ");
+        bitwisePrint(stxBuf.stx_mask);
+        printf("\n");
+
+        // if the stx buffer contains a time, print the time, else dont
+        printTime("aTime        (Access)", stxBuf.stx_mask, STATX_ATIME, stxBuf.stx_atime);
+        printTime("mTime        (Modify)", stxBuf.stx_mask, STATX_MTIME, stxBuf.stx_mtime);
+        printTime("cTime        (Change)", stxBuf.stx_mask, STATX_CTIME, stxBuf.stx_ctime);
+        printTime("crTime/bTime (Birth )", stxBuf.stx_mask, STATX_BTIME, stxBuf.stx_btime);
+
+        time_t t = time(NULL);
+        struct tm tm = *localtime(&t);
+        printf("now: %d-%02d-%02d_%02d.%02d.%02d\n", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+void travelDirectory(char sourceDirectory[]) {
+        ensureOsSeperator(sourceDirectory);
+        copyPath(sourceDirectory);
+
+        DIR *sourceDir = opendir(sourceDirectory); // returns DIR struct upon success, NULL upon failure
         struct dirent *dp;
         char *file_name; // define the filename variable
         struct stat filePathStatBuf;
@@ -112,18 +176,18 @@ void travelDirectory(char sourcePath[]) {
 
                 // concatonate the source path and file name together into a new
                 // variable
-                strcpy(filePath, sourcePath);
+                strcpy(filePath, sourceDirectory);
                 strcat(filePath, file_name);
 
                 // find if the filepath is a directory or not
                 stat(filePath, &filePathStatBuf);
                 if (S_ISDIR(filePathStatBuf.st_mode)) {
                         // if it is a directory
-                        getFileInfo(sourcePath);
+                        // getFileInfo(sourcePath);
                         travelDirectory(filePath);
                 } else {
                         // if it is a filepath
-                        getFileInfo(filePath);
+                        copyPath(filePath);
                 }
         }
         closedir(sourceDir); // closes the sourceDir DIR struct
@@ -133,19 +197,17 @@ int main() {
         // ensure last character of source folder is the os seperator
         char filename[] = "/home/zoey/Desktop/source";
         // char filename[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
-        ensureOsSep(filename);
+        ensureOsSeperator(filename);
 
         // ensure the last character of dest folder is the os seperator
         char destFolder[] = "/home/zoey/Desktop/test";
-        ensureOsSep(destFolder);
+        ensureOsSeperator(destFolder);
 
         // recursively itterate through every file and folder in source
         // directory, printing out the names of all directories and files,
         // including source directory
         printf("Copying from \"%s\" to \"%s\"\n", filename, destFolder);
         travelDirectory(filename);
-        getFileInfo("/home/zoey/Desktop/source/sourcefile.txt");
-        getFileInfo("/home/zoey/Desktop/source/sourcefile.txt");
 
         return 0;
 }
