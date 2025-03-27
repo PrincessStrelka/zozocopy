@@ -30,28 +30,15 @@
 char osSep = '/';
 long targetFileCount = 1347375; // the aim is to process 1347375 files in a reasonable speed
 
-void bitwisePrint(unsigned int var) {
-        unsigned int temp = var;
-        unsigned int maskSize = sizeof(var) * 8;
-        for (unsigned int bit = 0; bit < maskSize; bit++) {
-                printf("%u", (temp & 1 << (maskSize - 1) ? 1 : 0));
-                temp = temp << 1;
-        }
-}
+// https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
 void addChar(char *s, char c) {
-        // https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
         while (*s++)
                 ;     // Move pointer to the end
         *(s - 1) = c; // Append the new character
         *s = '\0';    // Add null terminator to mark new end
 }
-void ensureOsSeperator(char *s) {
-        if (s[strlen(s) - 1] != osSep) {
-                addChar(s, osSep);
-        }
-}
+// https:www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
 void intToStr(int N, char *str) {
-https: // www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
         int i = 0;
 
         // Save the copy of the number for sign
@@ -87,6 +74,19 @@ https: // www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
                 str[k] = temp;
         }
 }
+void bitwisePrint(unsigned int var) {
+        unsigned int temp = var;
+        unsigned int maskSize = sizeof(var) * 8;
+        for (unsigned int bit = 0; bit < maskSize; bit++) {
+                printf("%u", (temp & 1 << (maskSize - 1) ? 1 : 0));
+                temp = temp << 1;
+        }
+}
+void ensureOsSeperator(char *s) {
+        if (s[strlen(s) - 1] != osSep) {
+                addChar(s, osSep);
+        }
+}
 void printTime(char label[], unsigned int mask, unsigned int maskConst, struct statx_timestamp timestamp) {
         if (mask & maskConst) {
                 // get times from timestamp
@@ -97,7 +97,6 @@ void printTime(char label[], unsigned int mask, unsigned int maskConst, struct s
                 long long adjusted = tv_epoch + 2147483648;
                 signed long long sif_time = (adjusted % 4294967296) - 2147483648;
 
-                // get rid of the last two bits
                 // shift it over by two bits
                 // store the multiplier in the lower two bits
                 unsigned int sif_extra = (tv_nsec << 2) + floor(adjusted / 4294967296);
@@ -118,7 +117,30 @@ void printTime(char label[], unsigned int mask, unsigned int maskConst, struct s
                 printf("%s: -\n", label);
 }
 
-void copyPath(char path[]) {
+void replaceFirstInstance(char *str, char *match, char *replacement) {
+        char const *pos = strstr(str, match);
+        if (pos) {
+                // find the index of the substring match
+                int matchindex = pos - str;
+
+                // get everything from before the substring
+                char modifiedString[255] = "";
+                strncpy(modifiedString, str, matchindex);
+
+                // get everything from after the substring
+                char lastPart[255] = "";
+                strncpy(lastPart, str + matchindex + strlen(match), strlen(str));
+
+                // concatinate first part of string, replacement, and last part of string
+                strcat(modifiedString, replacement);
+                strcat(modifiedString, lastPart);
+
+                // put the modified string into string
+                strcpy(str, modifiedString);
+        }
+}
+
+void copyPath(char path[], char *baseFolder, char *destFolder) {
         // fill in the parameters for statx call, and call it
         struct statx stxBuf;
 
@@ -142,14 +164,35 @@ void copyPath(char path[]) {
         printTime("cTime        (Change)", stxBuf.stx_mask, STATX_CTIME, stxBuf.stx_ctime);
         printTime("crTime/bTime (Birth )", stxBuf.stx_mask, STATX_BTIME, stxBuf.stx_btime);
 
+        // ensure basefolder does not end with os sep
+        char copyBaseFolder[1000];
+        strcpy(copyBaseFolder, baseFolder);
+        if ((copyBaseFolder[strlen(copyBaseFolder) - 1]) == '/')
+                copyBaseFolder[strlen(copyBaseFolder) - 1] = '\0';
+
+        // get the source path base
+        char *lastOsSepIndex = strrchr(copyBaseFolder, osSep);
+        char *sourcePathBase = lastOsSepIndex ? lastOsSepIndex + 1 : copyBaseFolder;
+
+        // create a modified base path
+        ensureOsSeperator(destFolder);
+        char modifiedBaseFolder[1000];
         time_t t = time(NULL);
         struct tm tm = *localtime(&t);
-        printf("now: %d-%02d-%02d_%02d.%02d.%02d\n", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        sprintf(modifiedBaseFolder, "%s%s-%d-%02d-%02d_%02d.%02d.%02d", destFolder, sourcePathBase, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+        // swap out the base path in the filepath for the modified base path
+        char copyFilePath[1000] = "";
+        strcpy(copyFilePath, path);
+        printf("%s\n", copyFilePath);
+        replaceFirstInstance(copyFilePath, copyBaseFolder, modifiedBaseFolder);
+        printf("%s\n", copyFilePath);
 }
 
-void travelDirectory(char sourceDirectory[]) {
+void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder) {
         ensureOsSeperator(sourceDirectory);
-        copyPath(sourceDirectory);
+
+        copyPath(sourceDirectory, baseFolder, destFolder);
 
         DIR *sourceDir = opendir(sourceDirectory); // returns DIR struct upon success, NULL upon failure
         struct dirent *dp;
@@ -184,10 +227,10 @@ void travelDirectory(char sourceDirectory[]) {
                 if (S_ISDIR(filePathStatBuf.st_mode)) {
                         // if it is a directory
                         // getFileInfo(sourcePath);
-                        travelDirectory(filePath);
+                        travelDirectory(filePath, baseFolder, destFolder);
                 } else {
                         // if it is a filepath
-                        copyPath(filePath);
+                        copyPath(filePath, baseFolder, destFolder);
                 }
         }
         closedir(sourceDir); // closes the sourceDir DIR struct
@@ -195,19 +238,20 @@ void travelDirectory(char sourceDirectory[]) {
 
 int main() {
         // ensure last character of source folder is the os seperator
-        char filename[] = "/home/zoey/Desktop/source";
-        // char filename[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
+        char filename[1000] = "/home/zoey/Desktop/source";
+        //  char filename[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
         ensureOsSeperator(filename);
 
         // ensure the last character of dest folder is the os seperator
-        char destFolder[] = "/home/zoey/Desktop/test";
+        char destFolder[1000] = "/home/zoey/Desktop/test";
         ensureOsSeperator(destFolder);
 
         // recursively itterate through every file and folder in source
         // directory, printing out the names of all directories and files,
         // including source directory
         printf("Copying from \"%s\" to \"%s\"\n", filename, destFolder);
-        travelDirectory(filename);
+
+        travelDirectory(filename, filename, destFolder);
 
         return 0;
 }
