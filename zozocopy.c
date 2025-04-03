@@ -1,29 +1,28 @@
 // https://iq.opengenus.org/traversing-folders-in-c/
 
-#include <dirent.h>
 // #include <fcntl.h>
-#include <linux/stat.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <sys/statfs.h>
-#include <sys/statvfs.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <linux/fcntl.h>
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
-#include <linux/fcntl.h>
+#include <getopt.h>
+#include <limits.h>
+#include <linux/stat.h>
+#include <selinux/label.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/syscall.h>
-#include <time.h>
-
-#include <stdio.h>
 #include <string.h>
+#include <sys/sendfile.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/statvfs.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 
 // my global variables
 #define nullptr NULL
@@ -117,53 +116,32 @@ void printTime(char label[], unsigned int mask, unsigned int maskConst, struct s
                 printf("%s: -\n", label);
 }
 
-void replaceFirstInstance(char *str, char *match, char *replacement) {
-        char const *pos = strstr(str, match);
-        if (pos) {
+void replaceFirstInstance(char *src_string, char *substring, char *replacement) {
+        char const *substring_position = strstr(src_string, substring);
+        if (substring_position) {
                 // find the index of the substring match
-                int matchindex = pos - str;
+                int matchindex = substring_position - src_string;
 
                 // get everything from before the substring
                 char modifiedString[255] = "";
-                strncpy(modifiedString, str, matchindex);
+                strncpy(modifiedString, src_string, matchindex);
 
                 // get everything from after the substring
                 char lastPart[255] = "";
-                strncpy(lastPart, str + matchindex + strlen(match), strlen(str));
+                strncpy(lastPart, src_string + matchindex + strlen(substring), strlen(src_string));
 
                 // concatinate first part of string, replacement, and last part of string
                 strcat(modifiedString, replacement);
                 strcat(modifiedString, lastPart);
 
                 // put the modified string into string
-                strcpy(str, modifiedString);
+                strcpy(src_string, modifiedString);
         }
 }
 
-void copyPath(char path[], char *baseFolder, char *destFolder) {
-        // fill in the parameters for statx call, and call it
-        struct statx stxBuf;
-
-        // print the file we are statting, and the return code from calling statx
-        printf("\033[34m%s\033[0m\n", path);
-        int stxFlags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC;
-        unsigned int stxMask = STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE;
-        int ret = statx(AT_FDCWD, path, stxFlags, stxMask, &stxBuf);
-        printf("statx result: %i\n", ret);
-        if (ret < 0)
-                return;
-
-        // print the stx mask result
-        printf("stx_mask: ");
-        bitwisePrint(stxBuf.stx_mask);
-        printf("\n");
-
-        // if the stx buffer contains a time, print the time, else dont
-        printTime("aTime        (Access)", stxBuf.stx_mask, STATX_ATIME, stxBuf.stx_atime);
-        printTime("mTime        (Modify)", stxBuf.stx_mask, STATX_MTIME, stxBuf.stx_mtime);
-        printTime("cTime        (Change)", stxBuf.stx_mask, STATX_CTIME, stxBuf.stx_ctime);
-        printTime("crTime/bTime (Birth )", stxBuf.stx_mask, STATX_BTIME, stxBuf.stx_btime);
-
+void copyPath(char src_path[], char *baseFolder, char *destFolder) {
+        printf("\033[34m%s\033[0m\n", src_path);
+        /* ---- CREATE NEW FILE PATH ---- */
         // ensure basefolder does not end with os sep
         char copyBaseFolder[1000];
         strcpy(copyBaseFolder, baseFolder);
@@ -175,18 +153,57 @@ void copyPath(char path[], char *baseFolder, char *destFolder) {
         char *sourcePathBase = lastOsSepIndex ? lastOsSepIndex + 1 : copyBaseFolder;
 
         // create a modified base path
-        ensureOsSeperator(destFolder);
         char modifiedBaseFolder[1000];
         time_t t = time(NULL);
         struct tm tm = *localtime(&t);
         sprintf(modifiedBaseFolder, "%s%s-%d-%02d-%02d_%02d.%02d.%02d", destFolder, sourcePathBase, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
         // swap out the base path in the filepath for the modified base path
-        char copyFilePath[1000] = "";
-        strcpy(copyFilePath, path);
-        printf("%s\n", copyFilePath);
-        replaceFirstInstance(copyFilePath, copyBaseFolder, modifiedBaseFolder);
-        printf("%s\n", copyFilePath);
+        char dst_path[1000] = "";
+        strcpy(dst_path, src_path);
+        replaceFirstInstance(dst_path, copyBaseFolder, modifiedBaseFolder);
+        printf("\033[35m%s\033[0m\n", dst_path);
+
+        /* ---- GET BASE FILE STATS ---- */
+        // fill in the parameters for statx call, and call it
+        struct statx src_stxBuf;
+
+        // print the file we are statting, and the return code from calling statx
+        int src_statx_err = statx(AT_FDCWD,
+                                  src_path,
+                                  AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
+                                  STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
+                                  &src_stxBuf);
+        printf("statx result: %i\n", src_statx_err);
+        if (src_statx_err < 0)
+                return;
+
+        // print the stx mask result
+        printf("stx_mask: ");
+        bitwisePrint(src_stxBuf.stx_mask);
+        printf("\n");
+
+        // if the stx buffer contains a time, print the time, else dont
+        printTime("aTime        (Access)", src_stxBuf.stx_mask, STATX_ATIME, src_stxBuf.stx_atime);
+        printTime("mTime        (Modify)", src_stxBuf.stx_mask, STATX_MTIME, src_stxBuf.stx_mtime);
+        printTime("cTime        (Change)", src_stxBuf.stx_mask, STATX_CTIME, src_stxBuf.stx_ctime);
+        printTime("crTime/bTime (Birth )", src_stxBuf.stx_mask, STATX_BTIME, src_stxBuf.stx_btime);
+
+        /* ---- COPY FILE ---- */
+
+        /*
+        int byte_count, src_fd, dst_fd, copy_ret;
+        byte_count = 4096; // how big does this need to be?
+        unsigned char copy_buf[byte_count];
+
+        // get file descriptors
+        src_fd = open(src_path, O_RDONLY);                                         // get file descriptor from src path as read only
+        dst_fd = open(dst_path, O_WRONLY | O_CREAT | O_EXCL | O_NOATIME, S_IRWXU); // get file descriptor from src path as write only, possibly create dir
+        if (src_fd == -1 || dst_fd == -1)
+                printf("Error getting File Descriptor.\n");
+
+        close(src_fd);
+        close(dst_fd);*/
 }
 
 void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder) {
@@ -237,21 +254,76 @@ void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder)
 }
 
 int main() {
-        // ensure last character of source folder is the os seperator
-        char filename[1000] = "/home/zoey/Desktop/source";
-        //  char filename[] = "/media/zoey/DATA/BACKUP/Pictures/this user/";
-        ensureOsSeperator(filename);
+        // █ ▓ ░
+        // ---- COPY FILE AND DATA ----
+        char *src_path = "/home/zoey/Desktop/source/sourcefile.txt";
 
-        // ensure the last character of dest folder is the os seperator
-        char destFolder[1000] = "/home/zoey/Desktop/test";
-        ensureOsSeperator(destFolder);
+        // figure out the_bit_to_swap_out
+        char *the_bit_to_swap_out = "/home/zoey/Desktop/source";
 
-        // recursively itterate through every file and folder in source
-        // directory, printing out the names of all directories and files,
-        // including source directory
-        printf("Copying from \"%s\" to \"%s\"\n", filename, destFolder);
+        // ENSURE dst_folder AND ALL PARENT DIRECTORIES EXIST
+        char *dst_folder = "/home/zoey/Desktop/test/test/test";
+        char temp_path[strlen(dst_folder)];
+        for (int i = 0; i < (strlen(dst_folder)); i++) {
+                // if the current character is not os seperator,  or not the end of the loop, skip
+                if (dst_folder[i] != osSep && i != strlen(dst_folder) - 1)
+                        continue;
+                // copy everything up to this character into a temporary variable
+                strncpy(temp_path, dst_folder, i + 1);
+                // create a directory using the string in temp path
+                if (mkdir(temp_path, S_IRWXU | S_IRWXG | S_IRWXO) == -1)
+                        printf("Error creating [%s]: \033[31m%s\033[0m\n", temp_path, strerror(errno));
+                else
+                        printf("Created path [\033[32m%s\033[0m]\n", temp_path);
+        }
 
-        travelDirectory(filename, filename, destFolder);
+        // GENERATE PATH TO COPY FILE TO
+        char dst_path[1000] = "";
+        strcpy(dst_path, src_path);
 
+        // swap out the_bit_to_swap_out in src_path with dst_folder
+        char string_before_substring[255] = "";
+        char string_after_substring[255] = "";
+        int match_position = strstr(dst_path, the_bit_to_swap_out) - dst_path;
+        strncpy(string_before_substring, dst_path, match_position);
+        strncpy(string_after_substring, dst_path + match_position + strlen(the_bit_to_swap_out), strlen(dst_path));
+
+        // and append current time
+        // time_t t = time(NULL);
+        // struct tm tm = *localtime(&t);
+        // sprintf(dst_path, "%s%s%s-%d-%02d-%02d_%02d.%02d.%02d",
+        //        string_before_substring, dst_folder, string_after_substring,
+        //        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+        // print source and destination path
+        printf("Src path: \033[34m%s\033[0m\n", src_path);
+        printf("Dst path: \033[35m%s\033[0m\n", dst_path);
+
+        // ---- the following only works on non directory files. if path was a directory, it would have been created by prior steps  ----
+
+        // get the file directories of the source and destination paths
+        int src_fd, dst_fd;
+        if ((src_fd = open(src_path, O_RDONLY)) == -1)
+                printf("Error creating source File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+        if ((dst_fd = open(dst_path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) == -1)
+                printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+
+        // get the filesize of src_fd | TODO: is it better to use stat or fstat here?
+        struct stat src_stat;
+        if (fstat(src_fd, &src_stat) == -1)
+                printf("Error getting source file stat: \033[31m%s\033[0m\n", strerror(errno));
+
+        // copy all the bytes from the source file to the destination file
+        // TODO: figure out how to stop from updating the last data access timestamp of the file
+        // off_t copy_start_point = 0;
+        // ssize_t bytes_written;
+        // size_t bytes_to_copy = SIZE_MAX; // TODO: how big should this be?
+        // while (copy_start_point < src_stat.st_size) {
+        //        if ((bytes_written = sendfile(dst_fd, src_fd, &copy_start_point, bytes_to_copy)) == -1)
+        //                break;
+        //        copy_start_point += bytes_written;
+        //}
+        // close(src_fd);
+        // close(dst_fd);
         return 0;
 }
