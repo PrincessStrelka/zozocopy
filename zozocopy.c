@@ -1,13 +1,9 @@
-// https://iq.opengenus.org/traversing-folders-in-c/
-
-// #include <fcntl.h>
-#include <linux/fcntl.h>
-
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
+#include <linux/fcntl.h>
 #include <linux/stat.h>
 #include <selinux/label.h>
 #include <stdbool.h>
@@ -23,6 +19,8 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#define COUNT(arr) (sizeof(arr) / sizeof(*arr))
 
 // my global variables
 #define nullptr NULL
@@ -73,12 +71,13 @@ void intToStr(int N, char *str) {
                 str[k] = temp;
         }
 }
-void bitwisePrint(unsigned int var) {
-        unsigned int temp = var;
-        unsigned int maskSize = sizeof(var) * 8;
-        for (unsigned int bit = 0; bit < maskSize; bit++) {
-                printf("%u", (temp & 1 << (maskSize - 1) ? 1 : 0));
-                temp = temp << 1;
+void bitwisePrint(int var) {
+        int var_copy = var;                                            // copy the input into a modifyable variable
+        int mask_size = sizeof(var) * 8;                               // get the amount of bits in the input variable
+        for (size_t bit = 0; bit < mask_size; bit++) {                 // itterate through every bit in the input variable
+                bool is_one = var_copy & 1 << (mask_size - 1);         // check if the highest bit is one
+                printf("\033[%im%u\033[0m", is_one ? 97 : 30, is_one); // print the bit
+                var_copy = var_copy << 1;                              // put the next bit into the highest bit
         }
 }
 void ensureOsSeperator(char *s) {
@@ -262,14 +261,18 @@ int main() {
         char *the_bit_to_swap_out = "/home/zoey/Desktop/source";
 
         // ENSURE dst_folder AND ALL PARENT DIRECTORIES EXIST
-        char *dst_folder = "/home/zoey/Desktop/test/test/test";
-        char temp_path[strlen(dst_folder)];
-        for (int i = 0; i < (strlen(dst_folder)); i++) {
+        char dst_folder[] = "/home/zoey/Desktop/test/test/test";
+        char temp_path[COUNT(dst_folder)];
+        // bitwisePrint(temp_path);
+        // printf("\n");
+        for (size_t i = 0; i < (COUNT(dst_folder)); i++) {
                 // if the current character is not os seperator,  or not the end of the loop, skip
-                if (dst_folder[i] != osSep && i != strlen(dst_folder) - 1)
+                if (dst_folder[i] != osSep && i != COUNT(dst_folder) - 1)
                         continue;
                 // copy everything up to this character into a temporary variable
                 strncpy(temp_path, dst_folder, i + 1);
+                // set last bit of temp_path to null terminator to avoid reading junk data as part of the path
+                temp_path[i + 1] = '\0';
                 // create a directory using the string in temp path
                 if (mkdir(temp_path, S_IRWXU | S_IRWXG | S_IRWXO) == -1)
                         printf("Error creating [%s]: \033[31m%s\033[0m\n", temp_path, strerror(errno));
@@ -287,6 +290,7 @@ int main() {
         int match_position = strstr(dst_path, the_bit_to_swap_out) - dst_path;
         strncpy(string_before_substring, dst_path, match_position);
         strncpy(string_after_substring, dst_path + match_position + strlen(the_bit_to_swap_out), strlen(dst_path));
+        sprintf(dst_path, "%s%s%s", string_before_substring, dst_folder, string_after_substring);
 
         // and append current time
         // time_t t = time(NULL);
@@ -309,21 +313,24 @@ int main() {
                 printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
 
         // get the filesize of src_fd | TODO: is it better to use stat or fstat here?
-        struct stat src_stat;
-        if (fstat(src_fd, &src_stat) == -1)
+        struct stat src_stat = {0};
+        int result = 0;
+        result = fstat(src_fd, &src_stat);
+        if (result == -1)
                 printf("Error getting source file stat: \033[31m%s\033[0m\n", strerror(errno));
 
         // copy all the bytes from the source file to the destination file
         // TODO: figure out how to stop from updating the last data access timestamp of the file
-        // off_t copy_start_point = 0;
-        // ssize_t bytes_written;
-        // size_t bytes_to_copy = SIZE_MAX; // TODO: how big should this be?
-        // while (copy_start_point < src_stat.st_size) {
-        //        if ((bytes_written = sendfile(dst_fd, src_fd, &copy_start_point, bytes_to_copy)) == -1)
-        //                break;
-        //        copy_start_point += bytes_written;
-        //}
-        // close(src_fd);
-        // close(dst_fd);
+        size_t byte_buf_size = LONG_MAX; // TODO: how big should this be?
+        off_t copy_start_point = 0;
+        printf("Copy %lu bytes from FD %i to FD %i, %lu bytes at a time\n", src_stat.st_size, src_fd, dst_fd, byte_buf_size);
+        size_t loopcount = 0;
+        while (copy_start_point < src_stat.st_size) {
+                printf("Loop #%lu, copy start [%ld]\n", loopcount += 1, copy_start_point);
+                if (sendfile(dst_fd, src_fd, &copy_start_point, byte_buf_size) == -1)
+                        break;
+        }
+        close(src_fd);
+        close(dst_fd);
         return 0;
 }
