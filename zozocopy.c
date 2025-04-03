@@ -252,13 +252,75 @@ void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder)
         closedir(sourceDir); // closes the sourceDir DIR struct
 }
 
+struct ext4_time {
+        char label[64];
+        struct statx_timestamp statx_time;
+        signed long long epoch;
+        unsigned long long extra;
+        signed long long ns_epoch;
+};
+
+// global variables
+struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
+struct ext4_time *timestamps_to_fix[4];
+size_t fix_ts_index = 0;
+unsigned int stx_mask = 0;
+
+void printExt4Time(struct ext4_time *ext4_time) {
+        // get epoch as a formatted string
+        struct tm tm;
+        char dateStr[255];
+        char epochAsstr[10];
+        intToStr(ext4_time->statx_time.tv_sec, epochAsstr);
+        memset(&tm, 0, sizeof(struct tm));
+        strptime(epochAsstr, "%s", &tm);
+        strftime(dateStr, sizeof(dateStr), "%Y-%m-%d %H:%M:%S", &tm);
+
+        // print the time struct
+        printf("%s: %s.%u | %lld %llu | %lld", ext4_time->label, dateStr, ext4_time->statx_time.tv_nsec, ext4_time->epoch, ext4_time->extra, ext4_time->ns_epoch);
+}
+
+void fillInTime(struct ext4_time *ext4_time, char label[], struct statx_timestamp stx_time, unsigned int mask_const) {
+        strcpy(ext4_time->label, label);
+
+        if (stx_mask & mask_const) {
+                // put times into ext4_time struct
+                long long adjusted = stx_time.tv_sec + 2147483648;                         // epoch adjusted to be a positive number?
+                ext4_time->epoch = (adjusted % (4294967296)) - 2147483648;                 // the epoch adjusted to be a modifer for adjusted?
+                ext4_time->extra = (stx_time.tv_nsec << 2) + floor(adjusted / 4294967296); // shift tv_nsec over by two bits store the epoch multiplier in the lower two bits
+                ext4_time->ns_epoch = (stx_time.tv_sec * 1000000000) + stx_time.tv_nsec;   // the nanosecond unix epoch
+                ext4_time->statx_time = stx_time;                                          // put the time from the result of stx into our struct
+
+                // print ext4 time
+                printExt4Time(ext4_time);
+
+                // if the ns timestamp is the lowest ns timestamp, put into lowest variable
+                if (ext4_time->ns_epoch < lowest_time.ns_epoch) {
+                        printf(" | NEW LOWEST: %lld -> %lld", lowest_time.ns_epoch, ext4_time->ns_epoch);
+                        lowest_time.statx_time = ext4_time->statx_time;
+                        lowest_time.epoch = ext4_time->epoch;
+                        lowest_time.extra = ext4_time->extra;
+                        lowest_time.ns_epoch = ext4_time->ns_epoch;
+                }
+                printf("\n");
+        } else {
+
+                // mark this timestamp as one to be filled in with the lowest timestamp
+                printf("%s: -\n", ext4_time->label);
+                timestamps_to_fix[fix_ts_index] = ext4_time;
+                fix_ts_index += 1;
+        }
+}
+
 int main() {
         // █ ▓ ░
         // ---- COPY FILE AND DATA ----
-        char *src_path = "/home/zoey/Desktop/source/sourcefile.txt";
+        // char *src_path = "/home/zoey/Desktop/source/sourcefile.txt";
+        char *src_path = "/media/zoey/DATA/source/sourcefile.txt";
 
-        // figure out the_bit_to_swap_out
-        char *the_bit_to_swap_out = "/home/zoey/Desktop/source";
+        // TODO: figure out the_bit_to_swap_out
+        // char *the_bit_to_swap_out = "/home/zoey/Desktop/source";
+        char *the_bit_to_swap_out = "/media/zoey/DATA/source";
 
         // ENSURE dst_folder AND ALL PARENT DIRECTORIES EXIST
         char dst_folder[] = "/home/zoey/Desktop/test/test/test";
@@ -274,9 +336,12 @@ int main() {
                 // set last bit of temp_path to null terminator to avoid reading junk data as part of the path
                 temp_path[i + 1] = '\0';
                 // create a directory using the string in temp path
-                if (mkdir(temp_path, S_IRWXU | S_IRWXG | S_IRWXO) == -1)
-                        printf("Error creating [%s]: \033[31m%s\033[0m\n", temp_path, strerror(errno));
-                else
+                // if (mkdir(temp_path, S_IRWXU | S_IRWXG | S_IRWXO) == -1)
+                //        printf("Error creating [%s]: \033[31m%s\033[0m\n", temp_path, strerror(errno));
+                // else
+                //        printf("Created path [\033[32m%s\033[0m]\n", temp_path);
+
+                if (mkdir(temp_path, S_IRWXU | S_IRWXG | S_IRWXO) != -1)
                         printf("Created path [\033[32m%s\033[0m]\n", temp_path);
         }
 
@@ -312,7 +377,8 @@ int main() {
         if ((dst_fd = open(dst_path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) == -1)
                 printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
 
-        // get the filesize of src_fd | TODO: is it better to use stat or fstat here?
+        // get the filesize of src_fd
+        // TODO: is it better to use stat or fstat here?
         struct stat src_stat = {0};
         int result = 0;
         result = fstat(src_fd, &src_stat);
@@ -332,5 +398,57 @@ int main() {
         }
         close(src_fd);
         close(dst_fd);
+
+        // get stats of source file from statx
+        struct statx src_stxBuf;
+        result = statx(AT_FDCWD,
+                       src_path,
+                       AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
+                       STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
+                       &src_stxBuf);
+        if (result == -1)
+                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+
+        // print the stx mask result
+        stx_mask = src_stxBuf.stx_mask;
+        printf("stx_mask of \033[34m%s\033[0m: ", src_path);
+        bitwisePrint(stx_mask);
+        printf("\n\n");
+
+        // get all the times of the source file
+        lowest_time.ns_epoch = INT64_MAX;
+        fix_ts_index = 0;
+        struct ext4_time a_time, m_time, c_time, b_time; // TODO: figure out how to get rid of this line
+        fillInTime(&a_time, "aTime        (Access)", src_stxBuf.stx_atime, STATX_ATIME);
+        fillInTime(&m_time, "mTime        (Modify)", src_stxBuf.stx_mtime, STATX_MTIME);
+        fillInTime(&c_time, "cTime        (Change)", src_stxBuf.stx_ctime, STATX_CTIME);
+        fillInTime(&b_time, "bTime/crTime (Birth )", src_stxBuf.stx_btime, STATX_BTIME);
+
+        // fix missing timestamps
+        for (size_t i = 0; i < fix_ts_index; i++) {
+                struct ext4_time *timestamp_to_fix = timestamps_to_fix[i];
+                printf("\033[32m");
+                timestamp_to_fix->statx_time = lowest_time.statx_time;
+                timestamp_to_fix->epoch = lowest_time.epoch;
+                timestamp_to_fix->extra = lowest_time.extra;
+                timestamp_to_fix->ns_epoch = lowest_time.ns_epoch;
+                printExt4Time(timestamp_to_fix);
+                printf("\033[0m\n");
+        }
+
+        // put the source stats into the dest file
+        struct statx dst_stx;
+        result = statx(AT_FDCWD,
+                       dst_path,
+                       AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
+                       STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
+                       &dst_stx);
+        if (result == -1)
+                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+
+        printf("%lld %u | ", dst_stx.stx_btime.tv_sec, dst_stx.stx_btime.tv_nsec);
+        dst_stx.stx_btime = b_time.statx_time;
+        printf("%lld %u\n", dst_stx.stx_btime.tv_sec, dst_stx.stx_btime.tv_nsec);
+
         return 0;
 }
