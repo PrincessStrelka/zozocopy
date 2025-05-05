@@ -4,6 +4,8 @@
 #include <getopt.h>
 #include <limits.h>
 #include <linux/fcntl.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/stat.h>
 #include <selinux/label.h>
 #include <stdbool.h>
@@ -21,21 +23,35 @@
 #include <unistd.h>
 
 #define COUNT(arr) (sizeof(arr) / sizeof(*arr))
-
-// my global variables
 #define nullptr NULL
-char osSep = '/';
-long targetFileCount = 1347375; // the aim is to process 1347375 files in a reasonable speed
 
-// https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
-void addChar(char *s, char c) {
+struct ext4_time {
+        char label[64];
+        char field[64];
+        struct statx_timestamp statx_time;
+        signed long long epoch;
+        unsigned long long extra;
+        signed long long ns_epoch;
+};
+
+// █ ▓ ░
+// my global variables
+char osSep = '/';
+// global variables
+struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
+struct ext4_time *timestamps_to_fix[4];
+size_t fix_ts_index = 0;
+unsigned int stx_mask = 0;
+
+void gfgAddChar(char *s, char c) {
+        // https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
         while (*s++)
                 ;     // Move pointer to the end
         *(s - 1) = c; // Append the new character
         *s = '\0';    // Add null terminator to mark new end
 }
-// https:www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
-void intToStr(int N, char *str) {
+void gfgIntToStr(int N, char *str) {
+        // https:www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
         int i = 0;
 
         // Save the copy of the number for sign
@@ -82,7 +98,7 @@ void bitwisePrint(int var) {
 }
 void ensureOsSeperator(char *s) {
         if (s[strlen(s) - 1] != osSep) {
-                addChar(s, osSep);
+                gfgAddChar(s, osSep);
         }
 }
 void printTime(char label[], unsigned int mask, unsigned int maskConst, struct statx_timestamp timestamp) {
@@ -103,7 +119,7 @@ void printTime(char label[], unsigned int mask, unsigned int maskConst, struct s
                 struct tm tm;
                 char dateStr[255];
                 char epochAsstr[10];
-                intToStr(timestamp.tv_sec, epochAsstr);
+                gfgIntToStr(timestamp.tv_sec, epochAsstr);
                 memset(&tm, 0, sizeof(struct tm));
                 strptime(epochAsstr, "%s", &tm);
                 strftime(dateStr, sizeof(dateStr), "%Y-%m-%d %H:%M:%S", &tm);
@@ -114,7 +130,6 @@ void printTime(char label[], unsigned int mask, unsigned int maskConst, struct s
         } else
                 printf("%s: -\n", label);
 }
-
 void replaceFirstInstance(char *src_string, char *substring, char *replacement) {
         char const *substring_position = strstr(src_string, substring);
         if (substring_position) {
@@ -137,7 +152,6 @@ void replaceFirstInstance(char *src_string, char *substring, char *replacement) 
                 strcpy(src_string, modifiedString);
         }
 }
-
 void copyPath(char src_path[], char *baseFolder, char *destFolder) {
         printf("\033[34m%s\033[0m\n", src_path);
         /* ---- CREATE NEW FILE PATH ---- */
@@ -204,7 +218,6 @@ void copyPath(char src_path[], char *baseFolder, char *destFolder) {
         close(src_fd);
         close(dst_fd);*/
 }
-
 void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder) {
         ensureOsSeperator(sourceDirectory);
 
@@ -251,37 +264,33 @@ void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder)
         }
         closedir(sourceDir); // closes the sourceDir DIR struct
 }
+void epochToString(char *dateStr, signed long long epoch) {
+        struct tm tm;
+        char epochAsstr[10];
+        memset(&tm, 0, sizeof(struct tm));
+        gfgIntToStr(epoch, epochAsstr);
+        strptime(epochAsstr, "%s", &tm);
+        strftime(dateStr, 255, "%Y-%m-%d %H:%M:%S", &tm);
+}
+void printStxTime(char *label, struct statx_timestamp stx_time) {
+        char dateStr[255];
+        char buffer[254] = "-";
 
-struct ext4_time {
-        char label[64];
-        struct statx_timestamp statx_time;
-        signed long long epoch;
-        unsigned long long extra;
-        signed long long ns_epoch;
-};
+        epochToString(&dateStr, stx_time.tv_sec);
+        if (stx_time.tv_sec != 0)
+                sprintf(buffer, "%s.%u", dateStr, stx_time.tv_nsec);
 
-// global variables
-struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
-struct ext4_time *timestamps_to_fix[4];
-size_t fix_ts_index = 0;
-unsigned int stx_mask = 0;
-
+        printf("%s: %s \n", label, buffer);
+}
 void printExt4Time(struct ext4_time *ext4_time) {
         // get epoch as a formatted string
-        struct tm tm;
         char dateStr[255];
-        char epochAsstr[10];
-        intToStr(ext4_time->statx_time.tv_sec, epochAsstr);
-        memset(&tm, 0, sizeof(struct tm));
-        strptime(epochAsstr, "%s", &tm);
-        strftime(dateStr, sizeof(dateStr), "%Y-%m-%d %H:%M:%S", &tm);
-
-        // print the time struct
-        printf("%s: %s.%u | %lld %llu | %lld", ext4_time->label, dateStr, ext4_time->statx_time.tv_nsec, ext4_time->epoch, ext4_time->extra, ext4_time->ns_epoch);
+        epochToString(&dateStr, ext4_time->statx_time.tv_sec);
+        printf("%s %s: %s.%u | %lld %llu | %lld", ext4_time->field, ext4_time->label, dateStr, ext4_time->statx_time.tv_nsec, ext4_time->epoch, ext4_time->extra, ext4_time->ns_epoch);
 }
-
-void fillInTime(struct ext4_time *ext4_time, char label[], struct statx_timestamp stx_time, unsigned int mask_const) {
+void fillInTime(struct ext4_time *ext4_time, char field[], char label[], struct statx_timestamp stx_time, unsigned int mask_const) {
         strcpy(ext4_time->label, label);
+        strcpy(ext4_time->field, field);
 
         if (stx_mask & mask_const) {
                 // put times into ext4_time struct
@@ -313,17 +322,23 @@ void fillInTime(struct ext4_time *ext4_time, char label[], struct statx_timestam
 }
 
 int main() {
-        // █ ▓ ░
+        clock_t clock_start, clock_end;
+        double cpu_time_used_seconds;
+        long targetFileCount = 1347375;
+        clock_start = clock();
+
         // ---- COPY FILE AND DATA ----
-        // char *src_path = "/home/zoey/Desktop/source/sourcefile.txt";
-        char *src_path = "/media/zoey/DATA/source/sourcefile.txt";
-
         // TODO: figure out the_bit_to_swap_out
+        // if we are given a source directory, then the bit to swap out is just the source directory
+        // if we are given a source file, then the bit to swap out is just everything up until before the source file name
+        // char *src_path = "/home/zoey/Desktop/source/sourcefile.txt";
         // char *the_bit_to_swap_out = "/home/zoey/Desktop/source";
-        char *the_bit_to_swap_out = "/media/zoey/DATA/source";
+        char *src_path = "/media/zoey/DATA/SOURCE/sourcefile.txt";
+        char *the_bit_to_swap_out = "/media/zoey/DATA/SOURCE";
 
+        /* ---- ENSURE DIRECTORIES EXIST ---- */
         // ENSURE dst_folder AND ALL PARENT DIRECTORIES EXIST
-        char dst_folder[] = "/home/zoey/Desktop/test/test/test";
+        char dst_folder[] = "/home/zoey/Desktop/test";
         char temp_path[COUNT(dst_folder)];
         // bitwisePrint(temp_path);
         // printf("\n");
@@ -345,6 +360,7 @@ int main() {
                         printf("Created path [\033[32m%s\033[0m]\n", temp_path);
         }
 
+        /* ---- GENERATE NEW PATH FOR DESTINATION FILE ----*/
         // GENERATE PATH TO COPY FILE TO
         char dst_path[1000] = "";
         strcpy(dst_path, src_path);
@@ -357,19 +373,14 @@ int main() {
         strncpy(string_after_substring, dst_path + match_position + strlen(the_bit_to_swap_out), strlen(dst_path));
         sprintf(dst_path, "%s%s%s", string_before_substring, dst_folder, string_after_substring);
 
-        // and append current time
-        // time_t t = time(NULL);
-        // struct tm tm = *localtime(&t);
-        // sprintf(dst_path, "%s%s%s-%d-%02d-%02d_%02d.%02d.%02d",
-        //        string_before_substring, dst_folder, string_after_substring,
-        //        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        // append current time to source directory
 
         // print source and destination path
         printf("Src path: \033[34m%s\033[0m\n", src_path);
         printf("Dst path: \033[35m%s\033[0m\n", dst_path);
 
-        // ---- the following only works on non directory files. if path was a directory, it would have been created by prior steps  ----
-
+        /* ---- COPY BYTES FROM SOURCE TO DESTINATION FILE
+                the following only works on non directory files. if path was a directory, it would have been created by prior steps ----*/
         // get the file directories of the source and destination paths
         int src_fd, dst_fd;
         if ((src_fd = open(src_path, O_RDONLY)) == -1)
@@ -399,6 +410,7 @@ int main() {
         close(src_fd);
         close(dst_fd);
 
+        /* ---- COPY STATS FROM SOURCE TO DESTINATION ----*/
         // get stats of source file from statx
         struct statx src_stxBuf;
         result = statx(AT_FDCWD,
@@ -419,10 +431,10 @@ int main() {
         lowest_time.ns_epoch = INT64_MAX;
         fix_ts_index = 0;
         struct ext4_time a_time, m_time, c_time, b_time; // TODO: figure out how to get rid of this line
-        fillInTime(&a_time, "aTime        (Access)", src_stxBuf.stx_atime, STATX_ATIME);
-        fillInTime(&m_time, "mTime        (Modify)", src_stxBuf.stx_mtime, STATX_MTIME);
-        fillInTime(&c_time, "cTime        (Change)", src_stxBuf.stx_ctime, STATX_CTIME);
-        fillInTime(&b_time, "bTime/crTime (Birth )", src_stxBuf.stx_btime, STATX_BTIME);
+        fillInTime(&a_time, "atime", " (Access)", src_stxBuf.stx_atime, STATX_ATIME);
+        fillInTime(&m_time, "mtime", " (Modify)", src_stxBuf.stx_mtime, STATX_MTIME);
+        fillInTime(&c_time, "ctime", " (Change)", src_stxBuf.stx_ctime, STATX_CTIME);
+        fillInTime(&b_time, "crtime", "(Birth )", src_stxBuf.stx_btime, STATX_BTIME);
 
         // fix missing timestamps
         for (size_t i = 0; i < fix_ts_index; i++) {
@@ -436,19 +448,61 @@ int main() {
                 printf("\033[0m\n");
         }
 
-        // put the source stats into the dest file
-        struct statx dst_stx;
+        // get stats of destination file from statx
+        struct statx dst_stxBuf;
         result = statx(AT_FDCWD,
                        dst_path,
                        AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
                        STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
-                       &dst_stx);
+                       &dst_stxBuf);
         if (result == -1)
                 printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+        char dev_path[] = "/dev/nvme0n1p2";
+        unsigned long long inode = dst_stxBuf.stx_ino;
 
-        printf("%lld %u | ", dst_stx.stx_btime.tv_sec, dst_stx.stx_btime.tv_nsec);
-        dst_stx.stx_btime = b_time.statx_time;
-        printf("%lld %u\n", dst_stx.stx_btime.tv_sec, dst_stx.stx_btime.tv_nsec);
+        /* ---- COPY OVER STATS ---- */
+        printf("\n");
+
+        // put src atime in dst
+        // put src ctime in dst
+        // put src mtime in dst
+        // put src crime in dst
+
+        // TODO: MAKE THIS NOT USE A SYTSTEM CALL TO DEBUGFS. DEBUGFS DOES NOT WORK ON NTFS STYLE DRIVES
+        // df -T /media/zoey/DATA/SOURCE/sourcefile.txt | tail -n1 | cut -d' ' -f1
+        char temp_buf[255];
+        sprintf(temp_buf, "stat %s", src_path);
+        system(temp_buf);
+        printf("\n");
+
+        char epoch_buf[255];
+        char extra_buf[255];
+        sprintf(epoch_buf, "sudo debugfs -w -R 'set_inode_field <%llu> %s @0x%llx' %s", inode, c_time.field, c_time.epoch, dev_path);      // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
+        sprintf(extra_buf, "sudo debugfs -w -R 'set_inode_field <%llu> %s_extra 0x%llx' %s", inode, c_time.field, c_time.extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
+        printf("%s\n", epoch_buf);
+        printf("%s\n", extra_buf);
+        system(epoch_buf);
+        system(extra_buf);
+
+        system("sudo sync && sudo sysctl -w vm.drop_caches=3");
+        printf("\n");
+        sprintf(temp_buf, "stat %s", dst_path);
+        system(temp_buf);
+
+        // get the new statx of dst
+        printf("\n");
+        struct statx dst_stx;
+        if (statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stx) == -1)
+                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+        printStxTime("aTime        (Access)", dst_stx.stx_atime);
+        printStxTime("mTime        (Modify)", dst_stx.stx_mtime);
+        printStxTime("cTime        (Change)", dst_stx.stx_ctime);
+        printStxTime("bTime/crTime (Birth )", dst_stx.stx_btime);
+
+        clock_end = clock();
+        cpu_time_used_seconds = ((double)(clock_end - clock_start)) / CLOCKS_PER_SEC;
+        double timePerAllFiles = (cpu_time_used_seconds * targetFileCount);
+        printf("%f | An estimated %f min to process %li files\n", cpu_time_used_seconds, timePerAllFiles / 60, targetFileCount);
 
         return 0;
 }
