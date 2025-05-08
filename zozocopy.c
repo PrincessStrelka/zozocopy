@@ -275,11 +275,9 @@ void epochToString(char *dateStr, signed long long epoch) {
 void printStxTime(char *label, struct statx_timestamp stx_time) {
         char dateStr[255];
         char buffer[254] = "-";
-
         epochToString(&dateStr, stx_time.tv_sec);
         if (stx_time.tv_sec != 0)
                 sprintf(buffer, "%s.%u", dateStr, stx_time.tv_nsec);
-
         printf("%s: %s \n", label, buffer);
 }
 void printExt4Time(struct ext4_time *ext4_time) {
@@ -320,6 +318,16 @@ void fillInTime(struct ext4_time *ext4_time, char field[], char label[], struct 
                 fix_ts_index += 1;
         }
 }
+void get_b_time(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
+        *dst_stx_time = dst_stxBuf->stx_btime;
+}
+void compare_times(char *label, struct ext4_time src, struct statx_timestamp dst_tv) {
+        char src_sec_str[255] = "-";
+        char dst_sec_str[255] = "-";
+        epochToString(src_sec_str, src.epoch);
+        epochToString(dst_sec_str, dst_tv.tv_sec);
+        printf("%s src %s.%u | dst \033[%dm%s\033[0m.\033[%dm%u\033[0m\n", label, src_sec_str, src.statx_time.tv_nsec, src.epoch == dst_tv.tv_sec ? 92 : 91, dst_sec_str, src.statx_time.tv_nsec == dst_tv.tv_nsec ? 92 : 91, dst_tv.tv_nsec);
+}
 
 int main() {
         clock_t clock_start, clock_end;
@@ -335,6 +343,9 @@ int main() {
         // char *the_bit_to_swap_out = "/home/zoey/Desktop/source";
         char *src_path = "/media/zoey/DATA/SOURCE/sourcefile.txt";
         char *the_bit_to_swap_out = "/media/zoey/DATA/SOURCE";
+
+        // df -T /media/zoey/DATA/SOURCE/sourcefile.txt | tail -n1 | cut -d' ' -f1
+        char dev_path[] = "/dev/nvme0n1p2";
 
         /* ---- ENSURE DIRECTORIES EXIST ---- */
         // ENSURE dst_folder AND ALL PARENT DIRECTORIES EXIST
@@ -390,10 +401,8 @@ int main() {
 
         // get the filesize of src_fd
         // TODO: is it better to use stat or fstat here?
-        struct stat src_stat = {0};
-        int result = 0;
-        result = fstat(src_fd, &src_stat);
-        if (result == -1)
+        struct stat src_stat;
+        if ((fstat(src_fd, &src_stat)) == -1)
                 printf("Error getting source file stat: \033[31m%s\033[0m\n", strerror(errno));
 
         // copy all the bytes from the source file to the destination file
@@ -408,11 +417,11 @@ int main() {
                         break;
         }
         close(src_fd);
-        close(dst_fd);
 
         /* ---- COPY STATS FROM SOURCE TO DESTINATION ----*/
         // get stats of source file from statx
         struct statx src_stxBuf;
+        int result = 0;
         result = statx(AT_FDCWD,
                        src_path,
                        AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
@@ -427,16 +436,16 @@ int main() {
         bitwisePrint(stx_mask);
         printf("\n\n");
 
-        // get all the times of the source file
+        // get all the times of the source file in our custom struct. mark how many need to be fixed and what timestamp is the lowest
         lowest_time.ns_epoch = INT64_MAX;
         fix_ts_index = 0;
-        struct ext4_time a_time, m_time, c_time, b_time; // TODO: figure out how to get rid of this line
-        fillInTime(&a_time, "atime", " (Access)", src_stxBuf.stx_atime, STATX_ATIME);
-        fillInTime(&m_time, "mtime", " (Modify)", src_stxBuf.stx_mtime, STATX_MTIME);
-        fillInTime(&c_time, "ctime", " (Change)", src_stxBuf.stx_ctime, STATX_CTIME);
-        fillInTime(&b_time, "crtime", "(Birth )", src_stxBuf.stx_btime, STATX_BTIME);
+        struct ext4_time target_a_time, target_m_time, target_c_time, target_b_time;
+        fillInTime(&target_a_time, "atime", " (Access)", src_stxBuf.stx_atime, STATX_ATIME);
+        fillInTime(&target_m_time, "mtime", " (Modify)", src_stxBuf.stx_mtime, STATX_MTIME);
+        fillInTime(&target_c_time, "ctime", " (Change)", src_stxBuf.stx_ctime, STATX_CTIME);
+        fillInTime(&target_b_time, "crtime", "(Birth )", src_stxBuf.stx_btime, STATX_BTIME);
 
-        // fix missing timestamps
+        // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
         for (size_t i = 0; i < fix_ts_index; i++) {
                 struct ext4_time *timestamp_to_fix = timestamps_to_fix[i];
                 printf("\033[32m");
@@ -448,56 +457,68 @@ int main() {
                 printf("\033[0m\n");
         }
 
+        /* ---- COPY OVER STATS ---- */
+        // COPY ATIME and COPY MTIME
+        // TODO: is utimensat or futimens faster?
+        struct timespec times[2];
+        // set up atime
+        times[0].tv_sec = src_stxBuf.stx_atime.tv_sec;
+        times[0].tv_nsec = src_stxBuf.stx_atime.tv_nsec;
+        // set up mtime
+        times[1].tv_sec = src_stxBuf.stx_mtime.tv_sec;
+        times[1].tv_nsec = src_stxBuf.stx_mtime.tv_nsec;
+        // put the new times in the file directed to be dst fd
+        futimens(dst_fd, times);
+        close(dst_fd);
+
+        // COPY CTIME and COPY CRTIME
+        // TODO: MAKE THIS NOT USE A SYTSTEM CALL TO DEBUGFS. DEBUGFS IS SLOW AND DOES NOT WORK ON NTFS STYLE DRIVES
         // get stats of destination file from statx
         struct statx dst_stxBuf;
-        result = statx(AT_FDCWD,
-                       dst_path,
-                       AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
-                       STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
-                       &dst_stxBuf);
-        if (result == -1)
+        if ((statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf)) == -1)
                 printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-        char dev_path[] = "/dev/nvme0n1p2";
-        unsigned long long inode = dst_stxBuf.stx_ino;
+        unsigned long long inode = dst_stxBuf.stx_ino; // TODO: we only need the inode from this stxbuf, is there a faster way to get this?
+        // set ctime
 
-        /* ---- COPY OVER STATS ---- */
-        printf("\n");
+        // set crtime
+        struct ext4_time target_ext4_time = target_b_time;
 
-        // put src atime in dst
-        // put src ctime in dst
-        // put src mtime in dst
-        // put src crime in dst
+        char systembuf[255];
+        char *field = &target_ext4_time.field;
+        signed long long epoch = target_ext4_time.epoch;
+        unsigned long long extra = target_ext4_time.extra;
+        struct statx_timestamp target_stx_time = target_ext4_time.statx_time;
+        // loop until the stats have been correctly coppied
+        while (true) {
+                // get the updated stx for destination to check it has been correctly changed
+                if (statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf) == -1)
+                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
 
-        // TODO: MAKE THIS NOT USE A SYTSTEM CALL TO DEBUGFS. DEBUGFS DOES NOT WORK ON NTFS STYLE DRIVES
-        // df -T /media/zoey/DATA/SOURCE/sourcefile.txt | tail -n1 | cut -d' ' -f1
-        char temp_buf[255];
-        sprintf(temp_buf, "stat %s", src_path);
-        system(temp_buf);
-        printf("\n");
+                // set values for this loop
+                struct statx_timestamp current_stx_time = dst_stxBuf.stx_btime;
 
-        char epoch_buf[255];
-        char extra_buf[255];
-        sprintf(epoch_buf, "sudo debugfs -w -R 'set_inode_field <%llu> %s @0x%llx' %s", inode, c_time.field, c_time.epoch, dev_path);      // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
-        sprintf(extra_buf, "sudo debugfs -w -R 'set_inode_field <%llu> %s_extra 0x%llx' %s", inode, c_time.field, c_time.extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
-        printf("%s\n", epoch_buf);
-        printf("%s\n", extra_buf);
-        system(epoch_buf);
-        system(extra_buf);
+                // if the stat of source is same as dest, break
+                if (target_stx_time.tv_sec == current_stx_time.tv_sec && target_stx_time.tv_nsec == current_stx_time.tv_nsec)
+                        break;
 
-        system("sudo sync && sudo sysctl -w vm.drop_caches=3");
-        printf("\n");
-        sprintf(temp_buf, "stat %s", dst_path);
-        system(temp_buf);
+                // print error message
+                printf("\033[91mWUH OH. sif %s\033[0m\n", field);
 
-        // get the new statx of dst
-        printf("\n");
-        struct statx dst_stx;
-        if (statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stx) == -1)
-                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-        printStxTime("aTime        (Access)", dst_stx.stx_atime);
-        printStxTime("mTime        (Modify)", dst_stx.stx_mtime);
-        printStxTime("cTime        (Change)", dst_stx.stx_ctime);
-        printStxTime("bTime/crTime (Birth )", dst_stx.stx_btime);
+                // put source epoch in destination inode
+                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s @0x%llx' %s", inode, field, epoch, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
+                system(systembuf);
+                // put source epoch_extra in destination inode
+                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s_extra 0x%llx' %s", inode, field, extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
+                system(systembuf);
+                // drop the caches to refresh the times stat gets
+                system("sudo sync && sudo sysctl -w vm.drop_caches=3");
+        }
+
+        // DISPLAY THE source vs DST TIMES
+        compare_times(" a_time:", target_a_time, dst_stxBuf.stx_atime);
+        compare_times(" m_time:", target_m_time, dst_stxBuf.stx_mtime);
+        compare_times(" c_time:", target_c_time, dst_stxBuf.stx_ctime);
+        compare_times("cr_time:", target_b_time, dst_stxBuf.stx_btime);
 
         clock_end = clock();
         cpu_time_used_seconds = ((double)(clock_end - clock_start)) / CLOCKS_PER_SEC;
