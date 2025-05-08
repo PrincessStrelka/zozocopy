@@ -318,8 +318,11 @@ void fillInTime(struct ext4_time *ext4_time, char field[], char label[], struct 
                 fix_ts_index += 1;
         }
 }
-void get_b_time(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
+void get_stx_btime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
         *dst_stx_time = dst_stxBuf->stx_btime;
+}
+void get_stx_ctime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
+        *dst_stx_time = dst_stxBuf->stx_ctime;
 }
 void compare_times(char *label, struct ext4_time src, struct statx_timestamp dst_tv) {
         char src_sec_str[255] = "-";
@@ -327,6 +330,45 @@ void compare_times(char *label, struct ext4_time src, struct statx_timestamp dst
         epochToString(src_sec_str, src.epoch);
         epochToString(dst_sec_str, dst_tv.tv_sec);
         printf("%s src %s.%u | dst \033[%dm%s\033[0m.\033[%dm%u\033[0m\n", label, src_sec_str, src.statx_time.tv_nsec, src.epoch == dst_tv.tv_sec ? 92 : 91, dst_sec_str, src.statx_time.tv_nsec == dst_tv.tv_nsec ? 92 : 91, dst_tv.tv_nsec);
+}
+void debugfs_set_time(char *dev_path, char *dst_path, struct ext4_time target_ext4_time, void (*get_current_stx_func)(struct statx_timestamp *, struct statx *)) {
+        // TODO: can we get dev_path programatically?
+        // get stats of destination file from statx
+        struct statx dst_stxBuf;
+        if ((statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf)) == -1)
+                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+        unsigned long long inode = dst_stxBuf.stx_ino; // TODO: we only need the inode from this stxbuf, is there a faster way to get this?
+        char systembuf[255];
+        char *field = &target_ext4_time.field;
+        signed long long epoch = target_ext4_time.epoch;
+        unsigned long long extra = target_ext4_time.extra;
+        struct statx_timestamp target_stx_time = target_ext4_time.statx_time;
+        // loop until the stats have been correctly coppied
+        while (true) {
+                // get the updated stx for destination to check it has been correctly changed
+                if (statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf) == -1)
+                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+
+                // set values for this loop
+                struct statx_timestamp current_stx_time;
+                get_current_stx_func(&current_stx_time, &dst_stxBuf);
+
+                // if the stat of source is same as dest, break
+                if (target_stx_time.tv_sec == current_stx_time.tv_sec && target_stx_time.tv_nsec == current_stx_time.tv_nsec)
+                        break;
+
+                // print error message
+                printf("\033[91mWUH OH. sif %s\033[0m\n", field);
+
+                // put source epoch in destination inode
+                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s @0x%llx' %s", inode, field, epoch, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
+                system(systembuf);
+                // put source epoch_extra in destination inode
+                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s_extra 0x%llx' %s", inode, field, extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
+                system(systembuf);
+                // drop the caches to refresh the times stat gets
+                system("sudo sync && sudo sysctl -w vm.drop_caches=3");
+        }
 }
 
 int main() {
@@ -471,50 +513,18 @@ int main() {
         futimens(dst_fd, times);
         close(dst_fd);
 
-        // COPY CTIME and COPY CRTIME
+        // COPY CTIME
+
+        debugfs_set_time(dev_path, dst_path, target_c_time, get_stx_ctime);
+
+        // COPY CRTIME
         // TODO: MAKE THIS NOT USE A SYTSTEM CALL TO DEBUGFS. DEBUGFS IS SLOW AND DOES NOT WORK ON NTFS STYLE DRIVES
-        // get stats of destination file from statx
+        debugfs_set_time(dev_path, dst_path, target_b_time, get_stx_btime);
+
+        // DISPLAY THE source vs DST TIMES
         struct statx dst_stxBuf;
         if ((statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf)) == -1)
                 printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-        unsigned long long inode = dst_stxBuf.stx_ino; // TODO: we only need the inode from this stxbuf, is there a faster way to get this?
-        // set ctime
-
-        // set crtime
-        struct ext4_time target_ext4_time = target_b_time;
-
-        char systembuf[255];
-        char *field = &target_ext4_time.field;
-        signed long long epoch = target_ext4_time.epoch;
-        unsigned long long extra = target_ext4_time.extra;
-        struct statx_timestamp target_stx_time = target_ext4_time.statx_time;
-        // loop until the stats have been correctly coppied
-        while (true) {
-                // get the updated stx for destination to check it has been correctly changed
-                if (statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf) == -1)
-                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-
-                // set values for this loop
-                struct statx_timestamp current_stx_time = dst_stxBuf.stx_btime;
-
-                // if the stat of source is same as dest, break
-                if (target_stx_time.tv_sec == current_stx_time.tv_sec && target_stx_time.tv_nsec == current_stx_time.tv_nsec)
-                        break;
-
-                // print error message
-                printf("\033[91mWUH OH. sif %s\033[0m\n", field);
-
-                // put source epoch in destination inode
-                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s @0x%llx' %s", inode, field, epoch, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
-                system(systembuf);
-                // put source epoch_extra in destination inode
-                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s_extra 0x%llx' %s", inode, field, extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
-                system(systembuf);
-                // drop the caches to refresh the times stat gets
-                system("sudo sync && sudo sysctl -w vm.drop_caches=3");
-        }
-
-        // DISPLAY THE source vs DST TIMES
         compare_times(" a_time:", target_a_time, dst_stxBuf.stx_atime);
         compare_times(" m_time:", target_m_time, dst_stxBuf.stx_mtime);
         compare_times(" c_time:", target_c_time, dst_stxBuf.stx_ctime);
