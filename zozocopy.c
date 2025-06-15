@@ -18,6 +18,7 @@
 #include <sys/statfs.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -211,52 +212,7 @@ void copyPath(char src_path[], char *baseFolder, char *destFolder) {
         close(src_fd);
         close(dst_fd);*/
 }
-void travelDirectory(char sourceDirectory[], char *baseFolder, char *destFolder) {
-        ensureOsSeperator(sourceDirectory);
 
-        copyPath(sourceDirectory, baseFolder, destFolder);
-
-        DIR *sourceDir = opendir(sourceDirectory); // returns DIR struct upon success, NULL upon failure
-        struct dirent *dp;
-        char *file_name; // define the filename variable
-        struct stat filePathStatBuf;
-
-        // declare and initialise a variable that will store the sourcepath +
-        // filename should implement hannahs suggestion for dynamic allocation
-        char filePath[1000];
-
-        // if sourcedir is not a directory, exit
-        if (!sourceDir)
-                return;
-
-        // loop through every file under sourcePath
-        while ((dp = readdir(sourceDir)) != NULL) {
-                // get the file name from dp
-                file_name = dp->d_name;
-
-                // if we are on a refrence to the current(.) or parent(..)
-                // directory, skip this loop
-                if (strcmp(file_name, ".") == 0 || strcmp(file_name, "..") == 0)
-                        continue;
-
-                // concatonate the source path and file name together into a new
-                // variable
-                strcpy(filePath, sourceDirectory);
-                strcat(filePath, file_name);
-
-                // find if the filepath is a directory or not
-                stat(filePath, &filePathStatBuf);
-                if (S_ISDIR(filePathStatBuf.st_mode)) {
-                        // if it is a directory
-                        // getFileInfo(sourcePath);
-                        travelDirectory(filePath, baseFolder, destFolder);
-                } else {
-                        // if it is a filepath
-                        copyPath(filePath, baseFolder, destFolder);
-                }
-        }
-        closedir(sourceDir); // closes the sourceDir DIR struct
-}
 void epochToString(char *dateStr, signed long long epoch) {
         struct tm tm;
         char epochAsstr[10];
@@ -273,106 +229,21 @@ void printStxTime(char *label, struct statx_timestamp stx_time) {
                 sprintf(buffer, "%s.%u", dateStr, stx_time.tv_nsec);
         printf("%s: %s \n", label, buffer);
 }
-
 void printExt4Time(struct ext4_time *ext4_time) {
         // get epoch as a formatted string
         char dateStr[255];
         epochToString(&dateStr, ext4_time->statx_time.tv_sec);
         printf("%s %s: %s.%u | %lld %llu | %lld", ext4_time->field, ext4_time->field, dateStr, ext4_time->statx_time.tv_nsec, ext4_time->epoch, ext4_time->extra, ext4_time->ns_epoch);
 }
-
 void get_stx_btime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
         *dst_stx_time = dst_stxBuf->stx_btime;
 }
 void get_stx_ctime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
         *dst_stx_time = dst_stxBuf->stx_ctime;
 }
-void compare_times(char *label, struct ext4_time src, struct statx_timestamp dst_tv) {
-        char src_sec_str[255] = "-";
-        char dst_sec_str[255] = "-";
-        epochToString(src_sec_str, src.epoch);
-        epochToString(dst_sec_str, dst_tv.tv_sec);
-        printf("%s src %s.%u | dst \033[%dm%s\033[0m.\033[%dm%u\033[0m\n", label, src_sec_str, src.statx_time.tv_nsec, src.epoch == dst_tv.tv_sec ? 92 : 91, dst_sec_str, src.statx_time.tv_nsec == dst_tv.tv_nsec ? 92 : 91, dst_tv.tv_nsec);
-}
-void debugfs_set_time(char *dev_path, char *dst_path, struct ext4_time target_ext4_time, void (*get_current_stx_func)(struct statx_timestamp *, struct statx *)) {
-        // TODO: can we get dev_path programatically?
-        // get stats of destination file from statx
-        struct statx dst_stxBuf;
-        if ((statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf)) == -1)
-                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-        unsigned long long inode = dst_stxBuf.stx_ino; // TODO: we only need the inode from this stxbuf, is there a faster way to get this?
-        char systembuf[255];
-        char *field = &target_ext4_time.field;
-        signed long long epoch = target_ext4_time.epoch;
-        unsigned long long extra = target_ext4_time.extra;
-        struct statx_timestamp target_stx_time = target_ext4_time.statx_time;
-        // loop until the stats have been correctly coppied
-        while (true) {
-                // get the updated stx for destination to check it has been correctly changed
-                if (statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf) == -1)
-                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-
-                // set values for this loop
-                struct statx_timestamp current_stx_time;
-                get_current_stx_func(&current_stx_time, &dst_stxBuf);
-
-                // if the stat of source is same as dest, break
-                if (target_stx_time.tv_sec == current_stx_time.tv_sec && target_stx_time.tv_nsec == current_stx_time.tv_nsec)
-                        break;
-
-                // print error message
-                printf("\033[91mWUH OH. sif %s\033[0m\n", field);
-
-                // put source epoch in destination inode
-                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s @0x%llx' %s", inode, field, epoch, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
-                system(systembuf);
-                // put source epoch_extra in destination inode
-                sprintf(systembuf, "sudo debugfs -w -R 'set_inode_field <%llu> %s_extra 0x%llx' %s", inode, field, extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
-                system(systembuf);
-                // drop the caches to refresh the times stat gets
-                system("sudo sync && sudo sysctl -w vm.drop_caches=3");
-        }
-}
-void my_get_statx(char *path, struct statx *stxBuf) {
-        if ((statx(AT_FDCWD, path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, stxBuf)) == -1)
-                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-}
-/*
-void fillInTime2(size_t *fix_ts_index, struct ext4_time *timestamps_to_fix, struct ext4_time *lowest_time, unsigned int stx_mask, struct ext4_time *ext4_time, char field[], char label[], struct statx_timestamp stx_time, unsigned int mask_const) {
-        strcpy(ext4_time->field, field);
-
-        if (stx_mask & mask_const) {
-                // put times into ext4_time struct
-                long long adjusted = stx_time.tv_sec + 2147483648;                         // epoch adjusted to be a positive number?
-                ext4_time->epoch = (adjusted % (4294967296)) - 2147483648;                 // the epoch adjusted to be a modifer for adjusted?
-                ext4_time->extra = (stx_time.tv_nsec << 2) + floor(adjusted / 4294967296); // shift tv_nsec over by two bits store the epoch multiplier in the lower two bits
-                ext4_time->ns_epoch = (stx_time.tv_sec * 1000000000) + stx_time.tv_nsec;   // the nanosecond unix epoch
-                ext4_time->statx_time = stx_time;                                          // put the time from the result of stx into our struct
-
-                // print ext4 time
-                printExt4Time(ext4_time);
-
-                // if the ns timestamp is the lowest ns timestamp, put into lowest variable
-                if (ext4_time->ns_epoch < lowest_time->ns_epoch) {
-                        printf(" | NEW LOWEST: %lld -> %lld", lowest_time->ns_epoch, ext4_time->ns_epoch);
-                        lowest_time->statx_time = ext4_time->statx_time;
-                        lowest_time->epoch = ext4_time->epoch;
-                        lowest_time->extra = ext4_time->extra;
-                        lowest_time->ns_epoch = ext4_time->ns_epoch;
-                }
-                printf("\n");
-        } else {
-
-                // mark this timestamp as one to be filled in with the lowest timestamp
-                timestamps_to_fix[*fix_ts_index] = *ext4_time;
-                fix_ts_index += 1;
-        }
-}
-        */
-void fill_in_time(struct ext4_time *ts_to_fix, size_t *times_to_fix_index, struct ext4_time *lowest_time, unsigned int stx_mask, struct ext4_time *target_time, struct statx_timestamp stx_time, unsigned int mask_const, char ino_field[]) {
+void fill_in_time(struct ext4_time *ts_to_fix[], size_t *times_to_fix_index, struct ext4_time *lowest_time, unsigned int stx_mask, struct ext4_time *target_time, struct statx_timestamp stx_time, unsigned int mask_const, char ino_field[]) {
         // put inode field in struct
         strcpy(target_time->field, ino_field);
-        printf("Field: %s \n", target_time->field);
 
         // if mask has mask const
         if (stx_mask & mask_const) {
@@ -384,166 +255,358 @@ void fill_in_time(struct ext4_time *ts_to_fix, size_t *times_to_fix_index, struc
                 target_time->extra = (stx_time.tv_nsec << 2) + floor(adjusted / 4294967296); // shift tv_nsec over by two bits store the epoch multiplier in the lower two bits
                 target_time->ns_epoch = (stx_time.tv_sec * 1000000000) + stx_time.tv_nsec;   // the nanosecond unix epoch
 
-                // log the filled in fields
-                printf("Epoch: %lld Extra: %llu Ns epoch: %lld stx sec: %lld stx nsec:%u\n", target_time->epoch, target_time->extra, target_time->ns_epoch, target_time->statx_time.tv_sec, target_time->statx_time.tv_nsec);
-
                 // if the ns timestamp is the lowest ns timestamp, put into lowest variable
-                printf("Current lowest time %lld\n", lowest_time->ns_epoch);
-                if (target_time->ns_epoch < lowest_time->ns_epoch) {
-                        printf("NEW LOWEST: %s -> %s\n", lowest_time->field, target_time->field);
+                if (target_time->ns_epoch < lowest_time->ns_epoch)
                         *lowest_time = *target_time;
-                }
+
+                // print that this timestamp is good
+                printf("\033[32m%s\033[0m ", target_time->field);
+
                 return;
         }
         // mark this target_time as one to fix
-        printf("this one needs fixing\n");
-        ts_to_fix[*times_to_fix_index] = *target_time;
+        ts_to_fix[*times_to_fix_index] = target_time;
         *times_to_fix_index += 1;
 
-        printf("\n");
+        // print that this timestamp is bad
+        printf("\033[31m%s\033[0m ", target_time->field);
+}
+void calc_dir_items(char src_dir[], long *total_files) {
+        ensureOsSeperator(src_dir);
+        // printf("%s\n", src_dir);
+
+        struct dirent *dp;
+        DIR *opened_src_dir = opendir(src_dir); // returns DIR struct upon success, NULL upon failure
+        char *file_name;                        // the variable for the current file
+        char file_path_name[255];               // the variable to store the file name + file path
+        if (!opened_src_dir)                    // if sourcedir is not a directory, exit
+                return;
+        struct stat forps;
+        while ((dp = readdir(opened_src_dir)) != NULL) {
+                // get the file name from dp
+                file_name = dp->d_name;
+
+                // if we are on a refrence to the current(.) or parent(..)
+                // directory, skip this loop
+                if (strcmp(file_name, ".") == 0 || strcmp(file_name, "..") == 0)
+                        continue;
+
+                // concatonate the source path and file name together into a new variable
+                sprintf(file_path_name, "%s%s", src_dir, file_name);
+
+                // find if the filepath is a directory or not
+                if (stat(file_path_name, &forps) == 0) {
+                        *total_files += 1;
+                        if (forps.st_mode & __S_IFDIR) {
+                                // its a directory
+                                calc_dir_items(file_path_name, total_files);
+                        } else if (forps.st_mode & __S_IFREG) {
+                                // its a file
+                                // printf("\033[34m%s\033[0m\n", file_path_name);
+                        } else {
+                                printf("%s | it's a something else \n", file_path_name);
+                        }
+                } else {
+                        printf("%s | unable to get stat \n", file_path_name);
+                }
+        }
+        closedir(opened_src_dir); // closes the sourceDir DIR struct
+}
+
+void debugfs_copy_time(struct ext4_time target_time, char *dst_path, char *dev_path, void (*get_current_target_time_in_stx)(struct statx_timestamp *, struct statx *)) {
+        // get stats of src time for calling debugfs
+        // get inode of dst file
+        // setup fields needed for calling debugfs
+        char epoch_buf[255];
+        char extra_buf[255];
+        char *field;
+        signed long long epoch;
+        unsigned long long extra;
+        struct statx_timestamp target_stx_time;
+        struct statx dst_stxBuf;
+
+        // TODO: we only need the inode from this stxbuf, is there a faster way to get this?
+        if ((statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf)) == -1)
+                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+        unsigned long long dst_inode = dst_stxBuf.stx_ino;
+        field = &target_time.field;
+        epoch = target_time.epoch;
+        extra = target_time.extra;
+        target_stx_time = target_time.statx_time;
+        // void (*get_current_target_time_in_stx)(struct statx_timestamp *, struct statx *) = get_stx_ctime;
+
+        // generate the debugfs calls
+        sprintf(epoch_buf, "sudo debugfs -w -R 'set_inode_field <%llu> %stime @0x%llx' %s >nul 2>nul", dst_inode, field, epoch, dev_path);      // debugfs -w -R set_inode_field <DST_INODE> FIELD @EPOCH DEV_PATH
+        sprintf(extra_buf, "sudo debugfs -w -R 'set_inode_field <%llu> %stime_extra 0x%llx' %s >nul 2>nul", dst_inode, field, extra, dev_path); // debugfs -w -R set_inode_field <DST_INODE> FIELD_extra EXTRA DEV_PATH
+
+        // TODO: remove this bodge where i just need to loop until it has been successful
+        // TODO: MAKE THIS NOT USE A SYTSTEM CALL TO DEBUGFS. DEBUGFS IS SLOW AND DOES NOT WORK ON NTFS STYLE DRIVES
+        // loop until the stats have been correctly coppied
+        while (true) {
+                // update dst stx buf
+                if ((statx(AT_FDCWD, dst_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &dst_stxBuf)) == -1)
+                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+
+                // get what the target time field in the dst stx buf currently is
+                struct statx_timestamp dst_current_target_time;
+                get_current_target_time_in_stx(&dst_current_target_time, &dst_stxBuf);
+
+                // check if the times match eachother
+                if (target_stx_time.tv_sec == dst_current_target_time.tv_sec && target_stx_time.tv_nsec == dst_current_target_time.tv_nsec) {
+                        printf("\033[92m%s\033[0m ", field);
+                        break;
+                } else
+                        printf("\033[91m%s\033[0m ", field);
+
+                // put source epoch in destination inode
+                system(epoch_buf);
+
+                // put source epoch_extra in destination inode
+                system(extra_buf);
+
+                // drop the caches to refresh the times stat gets
+                system("sudo sync && sudo sysctl -w vm.drop_caches=3 >nul 2>nul");
+        }
+}
+
+void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long *items_progress, long total_items, char *dev_path, long *time_taken) {
+        clock_t start;
+        clock_t end;
+        ensureOsSeperator(src_dir);
+        // swap out src_dir_parent in src_dir with base_dst_dir /media/zoey/DATA
+        char dst_dir[100];
+        sprintf(dst_dir, "%s%s", base_dst_dir, src_dir + (strlen(src_dir_parent) - 1));
+
+        // ensure the dst directory exists
+        // itterate over every letter of dst_dir
+        char dst_dir_chunk[COUNT(dst_dir)];
+        bool dir_been_made = false;
+        for (size_t letter_index = 0; letter_index < (COUNT(dst_dir)); letter_index++) {
+                // if we arent at an os seperator or the end of dst_dir, skip this loop
+                if (dst_dir[letter_index] != os_sep && letter_index != COUNT(dst_dir) - 1)
+                        continue;
+                // copy everything before and including character into the temporary path
+                strncpy(dst_dir_chunk, dst_dir, letter_index + 1);
+                // and then add a null terminator to avoid reading junk data as part of the path
+                dst_dir_chunk[letter_index + 1] = '\0';
+                // try to create a directory using temp_path, and set if a dir has been made
+                if (mkdir(dst_dir_chunk, S_IRWXU | S_IRWXG | S_IRWXO) != -1)
+                        dir_been_made = true;
+        }
+
+        // TODO: copy over src dir times to dst dir
+        struct dirent *dp;
+        DIR *opened_src_dir = opendir(src_dir); // returns DIR struct upon success, NULL upon failure
+        char *file_name;                        // the variable for the current file
+        char src_file_path[255];                // the variable to store the file name + file path
+        if (!opened_src_dir)                    // if sourcedir is not a directory, exit
+                return;
+        struct stat forps;
+        while ((dp = readdir(opened_src_dir)) != NULL) {
+
+                // get the file name from dp
+                file_name = dp->d_name;
+
+                // if we are on a refrence to the current(.) or parent(..)
+                // directory, skip this loop
+                if (strcmp(file_name, ".") == 0 || strcmp(file_name, "..") == 0)
+                        continue;
+
+                // concatonate the source path and file name together into a new variable
+                sprintf(src_file_path, "%s%s", src_dir, file_name);
+
+                // start timer for the processing time of the loop
+                struct timeval stop, start;
+                gettimeofday(&start, NULL);
+
+                // find if the filepath is a directory or not
+                if (stat(src_file_path, &forps) == 0) {
+                        // update and output item progress
+                        *items_progress += 1;
+                        double percent_done = (double)*items_progress / (double)total_items;
+                        int progress_bar_total = 20;
+                        int bar_filled = progress_bar_total * percent_done;
+                        int bar_unfilled = progress_bar_total - bar_filled;
+
+                        // print progress bar
+                        printf("[\033[33m%.*s\033[0m%.*s] ", bar_filled, "####################", bar_unfilled, "--------------------");
+                        // print percentage done
+                        printf("[%6.2f%] ", percent_done * 100.0);
+                        // print amount done
+                        printf("[%ld/%ld] ", *items_progress, total_items);
+
+                        // OUTPUT IF A DIR HAS BEEN MADE
+                        if (dir_been_made) {
+                                printf("[\033[32mD\033[0m] ");
+                                dir_been_made = false;
+                        } else
+                                printf("[\033[30mD\033[0m] ");
+
+                        // determine what the item is
+                        if (forps.st_mode & __S_IFDIR) {
+                                // its a directory
+                                printf("[Dir] ");
+
+                                // print eta
+                                gettimeofday(&stop, NULL);
+                                *time_taken += (stop.tv_sec * 1000000 + stop.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
+                                double seconds = (((*time_taken / (double)*items_progress) * total_items) - *time_taken) / 1000000;
+                                int hour = seconds / 3600;
+                                seconds -= hour * 3600;
+                                int mins = seconds / 60;
+                                printf("[\033[94meta: %d:%d:%.2f\033[0m] ", hour, mins, seconds - mins * 60);
+                                gettimeofday(&start, NULL);
+
+                                // travel the directory
+                                printf("\n");
+                                travel_dir(src_file_path, src_dir_parent, base_dst_dir, items_progress, total_items, dev_path, time_taken);
+                        } else if (forps.st_mode & __S_IFREG) {
+                                // its a file
+                                printf("[Fil] ");
+
+                                // generate dst_file_path
+                                char dst_path[255];
+                                sprintf(dst_path, "%s%s", base_dst_dir, src_file_path + (strlen(src_dir_parent) - 1));
+
+                                /* ----- copy file ----- */
+                                // get the file directories of the source and destination paths
+                                int src_fd, dst_fd;
+                                if ((src_fd = open(src_file_path, O_RDONLY)) == -1)
+                                        printf("Error creating source File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+                                if ((dst_fd = open(dst_path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) == -1)
+                                        printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+
+                                // get the filesize of src_fd
+                                struct stat src_stat;
+                                if ((fstat(src_fd, &src_stat)) == -1) // TODO: is it better to use stat or fstat here?
+                                        printf("Error getting source file stat: \033[31m%s\033[0m\n", strerror(errno));
+
+                                // copy all the bytes from the source file to the destination file
+                                size_t byte_buf_size = LONG_MAX;
+                                off_t copy_start_point = 0;
+                                while (copy_start_point < src_stat.st_size) {
+                                        if (sendfile(dst_fd, src_fd, &copy_start_point, byte_buf_size) == -1)
+                                                break;
+                                }
+                                close(src_fd);
+
+                                /* ----- get the file stats ----- */
+                                // get stats of source file from statx
+                                struct statx src_stxBuf;
+                                if (statx(AT_FDCWD, src_file_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &src_stxBuf))
+                                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+                                unsigned int stx_mask = src_stxBuf.stx_mask;
+
+                                // get all the times of the source file in our custom struct. mark how many need to be fixed and what timestamp is the lowest
+                                printf("[Fix: ");
+                                struct ext4_time target_a_time, target_m_time, target_c_time, target_b_time;
+                                struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
+                                size_t ts_fix_index = 0;
+                                struct ext4_time *ts_to_fix[4] = {};
+                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_a_time, src_stxBuf.stx_atime, STATX_ATIME, "a");
+                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_m_time, src_stxBuf.stx_mtime, STATX_MTIME, "m");
+                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_c_time, src_stxBuf.stx_ctime, STATX_CTIME, "c");
+                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_b_time, src_stxBuf.stx_btime, STATX_BTIME, "cr");
+                                printf("]");
+
+                                // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
+                                for (size_t i = 0; i < ts_fix_index; i++) {
+                                        struct ext4_time *timestamp_to_fix = ts_to_fix[i];
+                                        timestamp_to_fix->statx_time = lowest_time.statx_time;
+                                        timestamp_to_fix->epoch = lowest_time.epoch;
+                                        timestamp_to_fix->extra = lowest_time.extra;
+                                        timestamp_to_fix->ns_epoch = lowest_time.ns_epoch;
+                                }
+
+                                /* ---- write the file stats ---- */
+                                printf(" [Set: ");
+                                // COPY ATIME and COPY MTIME
+                                struct timespec atime_mtime[2];
+                                // set up atime
+                                atime_mtime[0].tv_sec = src_stxBuf.stx_atime.tv_sec;
+                                atime_mtime[0].tv_nsec = src_stxBuf.stx_atime.tv_nsec;
+                                // set up mtime
+                                atime_mtime[1].tv_sec = src_stxBuf.stx_mtime.tv_sec;
+                                atime_mtime[1].tv_nsec = src_stxBuf.stx_mtime.tv_nsec;
+                                //  put the new times in the file directed to be dst fd
+                                printf("\033[92m%s\033[0m ", target_a_time.field);
+                                printf("\033[92m%s\033[0m ", target_m_time.field);
+                                // TODO: is utimensat or futimens faster?
+                                futimens(dst_fd, atime_mtime);
+                                close(dst_fd);
+
+                                // COPY CTIME
+                                debugfs_copy_time(target_c_time, dst_path, dev_path, get_stx_ctime);
+
+                                // COPY CRTIME
+                                debugfs_copy_time(target_b_time, dst_path, dev_path, get_stx_btime);
+                                printf("] ");
+
+                                // print eta
+                                gettimeofday(&stop, NULL);
+                                *time_taken += (stop.tv_sec * 1000000 + stop.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
+                                double seconds = (((*time_taken / (double)*items_progress) * total_items) - *time_taken) / 1000000;
+                                int hour = seconds / 3600;
+                                seconds -= hour * 3600;
+                                int mins = seconds / 60;
+                                printf("[\033[94meta: %d:%d:%.2f\033[0m] ", hour, mins, seconds - mins * 60);
+                                gettimeofday(&start, NULL);
+
+                                printf("\n");
+                        } else {
+                                printf("%s | it's a something else \n", src_file_path);
+                        }
+
+                } else {
+                        printf("%s | unable to get stat \n", src_file_path);
+                }
+        }
+        closedir(opened_src_dir); // closes the sourceDir DIR struct
 }
 
 int main() {
-        clock_t clock_start, clock_end;
-        double cpu_time_used_seconds;
-        clock_start = clock();
+        clock_t program_start = clock();
+        long target_file_count = 1347375;
 
         /* ---- ARGS ---- */
+        // TODO: can we get dev_path programatically? or figure out how to not need it at all?
         char dev_path[] = "/dev/nvme0n1p2";
-        char *src_path = "/media/zoey/DATA/SOURCE/sourcefile.txt";
-        char *src_dir = "/media/zoey/DATA/SOURCE";
-        char *dst_dir = "/home/zoey/Desktop/test";
+        char src_dir[] = "/media/zoey/DATA/SOURCE";
+        char *base_dst_dir = "/home/zoey/Desktop/dest";
 
-        /* ---- Figure out how many files we will be processing ---- */
-        long total_file_count = 1347375;
-
-        /* ---- ENSURE dst_folder and its parent DIRECTORIES EXIST ---- */
-        // get the length of dst_folder
-        size_t dst_dir_len = COUNT(dst_dir);
-
-        // create temporary var the size of dst_dir
-        char temp_path[dst_dir_len];
-
-        // itterate over every letter of dst_dir
-        for (size_t letter_index = 0; letter_index < (dst_dir_len); letter_index++) {
-                // if we arent at an os seperator or the end of dst_dir, skip this loop
-                if (dst_dir[letter_index] != os_sep && letter_index != dst_dir_len - 1)
-                        continue;
-                // copy everything before and including character into the temporary path
-                strncpy(temp_path, dst_dir, letter_index + 1);
-                // and then add a null terminator to avoid reading junk data as part of the path
-                temp_path[letter_index + 1] = '\0';
-                // try to create a directory using temp_path
-                if (mkdir(temp_path, S_IRWXU | S_IRWXG | S_IRWXO) != -1)
-                        printf("Created path [\033[32m%s\033[0m]\n", temp_path);
+        /* ---- figure out the source dir parent ---- */
+        char src_dir_parent[1000];
+        size_t last_char_index = 0;
+        for (size_t letter_index = 0; letter_index < strlen(src_dir); letter_index++) {
+                //  if we are an os seperator, mark our position
+                if (src_dir[letter_index] == os_sep)
+                        last_char_index = letter_index;
         }
+        strncpy(src_dir_parent, src_dir, last_char_index);
 
-        /* ---- GENERATE NEW PATH FOR DESTINATION FILE ----*/
-        // create an empty variable for the dst_path, and put src_path into it
-        // swap out source_directory in src_path with dst_folder
-        char dst_path[255], string_after_substring[255];
-        strcpy(dst_path, src_path);
-        int match_position = strstr(dst_path, src_dir) - dst_path;
-        strncpy(string_after_substring, dst_path + match_position + strlen(src_dir), strlen(dst_path));
-        sprintf(dst_path, "%s%s", dst_dir, string_after_substring);
+        /* ---- ensure src dir top in dst dir exists ---- */
+        printf("\033[34m%s\033[0m\n", src_dir);
+        printf("%s\n", src_dir_parent);
+        printf("\033[35m%s\033[0m\n", base_dst_dir);
 
-        /* ---- COPY BYTES FROM SOURCE TO DESTINATION FILE
-                the following only works on non directory files. if path was a directory, it would have been created by prior steps ----*/
-        // get the file directories of the source and destination paths
-        int src_fd, dst_fd;
-        if ((src_fd = open(src_path, O_RDONLY)) == -1)
-                printf("Error creating source File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
-        if ((dst_fd = open(dst_path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) == -1)
-                printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+        /* ---- Figure out how many items we will be processing ---- */
+        long total_items = 0;
+        calc_dir_items(src_dir, &total_items);
 
-        // get the filesize of src_fd
-        struct stat src_stat;
-        if ((fstat(src_fd, &src_stat)) == -1) // TODO: is it better to use stat or fstat here?
-                printf("Error getting source file stat: \033[31m%s\033[0m\n", strerror(errno));
+        /* ---- itterate through every file in src dir and subdirs ---- */
+        printf("%ld Items\n", total_items);
+        long items_progress = 0;
+        long time_taken = 0;
+        travel_dir(src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
 
-        // copy all the bytes from the source file to the destination file
-        size_t byte_buf_size = LONG_MAX;
-        off_t copy_start_point = 0;
-        while (copy_start_point < src_stat.st_size) {
-                if (sendfile(dst_fd, src_fd, &copy_start_point, byte_buf_size) == -1)
-                        break;
-        }
-        close(src_fd);
-
-        /* ---- COPY STATS FROM SOURCE TO DESTINATION ----*/
-        // get stats of source file from statx
-        struct statx src_stxBuf;
-        if (statx(AT_FDCWD, src_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &src_stxBuf))
-                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-        unsigned int stx_mask = src_stxBuf.stx_mask;
-
-        // get all the times of the source file in our custom struct. mark how many need to be fixed and what timestamp is the lowest
-        struct ext4_time target_a_time, target_m_time, target_c_time, target_b_time;
-        struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
-        size_t ts_fix_index = 0;
-        struct ext4_time *ts_to_fix[4] = {};
-        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_a_time, src_stxBuf.stx_atime, STATX_ATIME, "atime");
-        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_m_time, src_stxBuf.stx_mtime, STATX_MTIME, "mtime");
-        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_c_time, src_stxBuf.stx_ctime, STATX_CTIME, "ctime");
-        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_b_time, src_stxBuf.stx_btime, STATX_BTIME, "crtime");
-
-        // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
-        for (size_t i = 0; i < ts_fix_index; i++) {
-                printf("\033[32m");
-                struct ext4_time *timestamp_to_fix = ts_to_fix[i];
-                printf("%s", timestamp_to_fix->field);
-                printf("\033[0m\n");
-        }
-
+        printf("\n");
+        // printf("Total program run time: %fs\n", (double)(clock() - program_start) / CLOCKS_PER_SEC);
+        double seconds = ((time_taken / 1000000) / (double)total_items) * target_file_count;
+        int hour = seconds / 3600;
+        seconds -= hour * 3600;
+        int mins = seconds / 60;
+        printf("Estimated time to complete target [%ld] Files: %d:%d:%f\n", target_file_count, hour, mins, seconds - mins * 60);
+        printf("Done! 🎉\n\n");
+        // system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
         return 0;
-
-        // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
-        for (size_t i = 0; i < ts_fix_index; i++) {
-                struct ext4_time *timestamp_to_fix = ts_to_fix[i];
-
-                timestamp_to_fix->statx_time = lowest_time.statx_time;
-                timestamp_to_fix->epoch = lowest_time.epoch;
-                timestamp_to_fix->extra = lowest_time.extra;
-                timestamp_to_fix->ns_epoch = lowest_time.ns_epoch;
-                printExt4Time(timestamp_to_fix);
-        }
-
-        /* ---- COPY OVER STATS ---- */
-        // TODO: MAKE THIS NOT USE A SYTSTEM CALL TO DEBUGFS. DEBUGFS IS SLOW AND DOES NOT WORK ON NTFS STYLE DRIVES
-        // TODO: is utimensat or futimens faster?
-        // COPY ATIME and COPY MTIME
-        struct timespec atime_mtime[2];
-        // set up atime
-        atime_mtime[0].tv_sec = src_stxBuf.stx_atime.tv_sec;
-        atime_mtime[0].tv_nsec = src_stxBuf.stx_atime.tv_nsec;
-        // set up mtime
-        atime_mtime[1].tv_sec = src_stxBuf.stx_mtime.tv_sec;
-        atime_mtime[1].tv_nsec = src_stxBuf.stx_mtime.tv_nsec;
-        // put the new times in the file directed to be dst fd
-        futimens(dst_fd, atime_mtime);
-        close(dst_fd);
-        // COPY CTIME
-        debugfs_set_time(dev_path, dst_path, target_c_time, get_stx_ctime);
-        // COPY CRTIME
-        debugfs_set_time(dev_path, dst_path, target_b_time, get_stx_btime);
-
-        /* ------------- OUTPUT INFORMATION -------------*/
-        // █ ▓ ░
-        // print source and destination path
-        printf("Src path: \033[34m%s\033[0m\n", src_path);
-        printf("Dst path: \033[35m%s\033[0m\n", dst_path);
-
-        // DISPLAY THE source vs DST TIMES
-        struct statx dst_stxBuf;
-        my_get_statx(dst_path, &dst_stxBuf);
-        compare_times(" a_time:", target_a_time, dst_stxBuf.stx_atime);
-        compare_times(" m_time:", target_m_time, dst_stxBuf.stx_mtime);
-        compare_times(" c_time:", target_c_time, dst_stxBuf.stx_ctime);
-        compare_times("cr_time:", target_b_time, dst_stxBuf.stx_btime);
-
-        // end the timer and estimate how long it will take to process all the files
-        clock_end = clock();
-        cpu_time_used_seconds = ((double)(clock_end - clock_start)) / CLOCKS_PER_SEC;
-        double timePerAllFiles = (cpu_time_used_seconds * total_file_count);
-        printf("%f | An estimated %f min to process all %li files\n", cpu_time_used_seconds, timePerAllFiles / 60, total_file_count);
 }
