@@ -3,6 +3,7 @@
                 "limits": "c",
                 "stdint.h": "c",
                 "cstdlib": "c",
-                "stat.h": "c"
+                "stat.h": "c",
+                "module.h": "c"
         }
 }
