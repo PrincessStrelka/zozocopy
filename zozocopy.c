@@ -188,6 +188,22 @@ void print_seconds(double seconds) {
         printf("%dh %dm %fs", hour, mins, seconds - mins * 60);
 }
 
+struct profile {
+        char label[64];
+        long total_usec;
+        int count;
+};
+
+struct profile get_stats_profile = {.label = "get stats from source file"};
+struct profile timecopy_profile = {.label = "a and m time"};
+struct profile debugfs_profile = {.label = "c and b/cr time"};
+void add_profiling(struct profile *prof, struct timeval *stop, struct timeval *start) {
+        gettimeofday(stop, NULL);
+        prof->total_usec += (stop->tv_sec * 1000000 + stop->tv_usec) - (start->tv_sec * 1000000 + start->tv_usec);
+        prof->count += 1;
+        gettimeofday(start, NULL);
+};
+
 void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base_dst_dir[], long *items_progress, long total_items, char *dev_path, long *time_taken) {
         // ensure that src_dir has an os seperator on the end
         ensureOsSeperator(src_dir);
@@ -261,6 +277,9 @@ void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base
                         close(src_fd);
 
                         /* ----- get the file stats ----- */
+                        struct timeval prof_stop, prof_start;
+                        gettimeofday(&prof_start, NULL);
+
                         // get stats of source file from statx
                         struct statx src_stxBuf;
                         if (statx(AT_FDCWD, src_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &src_stxBuf))
@@ -277,8 +296,9 @@ void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base
                         fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_m_time, src_stxBuf.stx_mtime, STATX_MTIME, "m");
                         fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_c_time, src_stxBuf.stx_ctime, STATX_CTIME, "c");
                         fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_b_time, src_stxBuf.stx_btime, STATX_BTIME, "cr");
-                        printf("]");
 
+                        // ---- fix timestamps ----
+                        // we are copying from an ntfs drive so we know crtime will always be the empty one
                         // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
                         for (size_t i = 0; i < ts_fix_index; i++) {
                                 struct ext4_time *timestamp_to_fix = ts_to_fix[i];
@@ -287,8 +307,11 @@ void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base
                                 timestamp_to_fix->extra = lowest_time.extra;
                                 timestamp_to_fix->ns_epoch = lowest_time.ns_epoch;
                         }
+                        printf("]");
+                        add_profiling(&get_stats_profile, &prof_stop, &prof_start);
 
                         // ---- write the file stats ----
+
                         printf(" [Set: ");
                         // COPY ATIME and COPY MTIME
                         struct timespec atime_mtime[2];
@@ -304,13 +327,18 @@ void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base
                         // TODO: is utimensat or futimens faster?
                         futimens(dst_fd, atime_mtime);
                         close(dst_fd);
+                        add_profiling(&timecopy_profile, &prof_stop, &prof_start);
 
+                        // ---- DEBUGFS STAT COPY ----
                         // COPY CTIME
+
                         debugfs_copy_time(target_c_time, dst_path, dev_path, get_stx_ctime);
 
                         // COPY CRTIME
                         debugfs_copy_time(target_b_time, dst_path, dev_path, get_stx_btime);
 
+                        // ---- DEBUGFS STAT COPY ----
+                        add_profiling(&debugfs_profile, &prof_stop, &prof_start);
                         printf("]\n");
                 } else {
                         printf("%s | it's a something else \n", src_path);
@@ -328,7 +356,7 @@ int main() {
         char *base_dst_dir = "/home/zoey/Desktop/dest";
         char dev_path[] = "/dev/nvme0n1p2"; // TODO: can we get dev_path programatically? or figure out how to not need it at all?
         os_sep = '/';                       // TODO: can we get os seperator programatically?
-        long target_time_mins = 60;
+        long target_time_mins = 30;
         long target_item_count = 1347375;
 
         /* ---- figure out the deepest directory in the source dir path ---- */
@@ -388,6 +416,10 @@ int main() {
         printf("\033[0m\n");
 
         printf("Done! 🎉\n\n");
-        system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
+        // system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
+
+        printf("%s: %f\n", get_stats_profile.label, ((double)get_stats_profile.total_usec / get_stats_profile.count) / 1000000);
+        printf("%s: %f\n", timecopy_profile.label, ((double)timecopy_profile.total_usec / timecopy_profile.count) / 1000000);
+        printf("%s: %f\n", debugfs_profile.label, ((double)debugfs_profile.total_usec / debugfs_profile.count) / 1000000);
         return 0;
 }
