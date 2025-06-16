@@ -369,6 +369,13 @@ void debugfs_copy_time(struct ext4_time target_time, char *dst_path, char *dev_p
         }
 }
 
+void print_seconds(double seconds) {
+        int hour = seconds / 3600;
+        seconds -= hour * 3600;
+        int mins = seconds / 60;
+        printf("%dh %dm %fs", hour, mins, seconds - mins * 60);
+}
+
 void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long *items_progress, long total_items, char *dev_path, long *time_taken) {
         clock_t start;
         clock_t end;
@@ -543,14 +550,14 @@ void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long
                                 printf("] ");
 
                                 // print eta
-                                gettimeofday(&stop, NULL);
-                                *time_taken += (stop.tv_sec * 1000000 + stop.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
-                                double seconds = (((*time_taken / (double)*items_progress) * total_items) - *time_taken) / 1000000;
-                                int hour = seconds / 3600;
-                                seconds -= hour * 3600;
-                                int mins = seconds / 60;
-                                printf("[\033[94meta: %d:%d:%.2f\033[0m] ", hour, mins, seconds - mins * 60);
-                                gettimeofday(&start, NULL);
+                                // gettimeofday(&stop, NULL);
+                                //*time_taken += (stop.tv_sec * 1000000 + stop.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
+                                // double seconds = (((*time_taken / (double)*items_progress) * total_items) - *time_taken) / 1000000;
+                                // int hour = seconds / 3600;
+                                // seconds -= hour * 3600;
+                                // int mins = seconds / 60;
+                                // printf("[\033[94meta: %d:%d:%.2f\033[0m] ", hour, mins, seconds - mins * 60);
+                                // gettimeofday(&start, NULL);
 
                                 printf("\n");
                         } else {
@@ -565,8 +572,9 @@ void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long
 }
 
 int main() {
+        struct timeval total_stop, total_start;
+        gettimeofday(&total_start, NULL);
         clock_t program_start = clock();
-        long target_file_count = 1347375;
 
         /* ---- ARGS ---- */
         // TODO: can we get dev_path programatically? or figure out how to not need it at all?
@@ -598,14 +606,26 @@ int main() {
         long items_progress = 0;
         long time_taken = 0;
         travel_dir(src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
+        gettimeofday(&total_stop, NULL);
+
+        // print stuff on completion
+        long target_time_mins = 60;
+        long target_item_count = 1347375;
 
         printf("\n");
-        // printf("Total program run time: %fs\n", (double)(clock() - program_start) / CLOCKS_PER_SEC);
-        double seconds = ((time_taken / 1000000) / (double)total_items) * target_file_count;
-        int hour = seconds / 3600;
-        seconds -= hour * 3600;
-        int mins = seconds / 60;
-        printf("Estimated time to complete target [%ld] Files: %d:%d:%f\n", target_file_count, hour, mins, seconds - mins * 60);
+        double total_time_usec = (double)((total_stop.tv_sec * 1000000 + total_stop.tv_usec) - (total_start.tv_sec * 1000000 + total_start.tv_usec));
+        double usec_per_item = total_time_usec / (double)total_items;
+        printf("Completed in \033[94m%f\033[0ms at \033[94m%f\033[0ms/i\n", total_time_usec / 1000000, usec_per_item / 1000000);
+        double usec_per_item_target = ((double)target_time_mins * 60 * 1000000) / (double)target_item_count;
+        double sec_per_item_dif = (usec_per_item - usec_per_item_target) / 1000000;
+        printf("The program is running \033[%im%f\033[0ms %s of the target speed [\033[94m%f\033[0ms/i] \n", sec_per_item_dif >= 0 ? 31 : 32, sec_per_item_dif, sec_per_item_dif >= 0 ? "behind" : "ahead", usec_per_item_target / 1000000);
+
+        printf("\033[93m%ld\033[0m items would be completed in \033[31m", target_item_count);
+        print_seconds(((total_time_usec / (double)total_items) * (double)target_item_count) / 1000000);
+        printf("\033[0m. The target time to complete is \033[93m");
+        print_seconds(target_time_mins * 60);
+        printf("\033[0m\n");
+
         printf("Done! 🎉\n\n");
         // system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
         return 0;
