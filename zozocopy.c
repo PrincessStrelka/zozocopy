@@ -388,45 +388,43 @@ int main() {
         gettimeofday(&total_start, NULL);
 
         /* ---- ARGS ---- */
-        // TODO: can we get dev_path programatically? or figure out how to not need it at all?
-        char dev_path[] = "/dev/nvme0n1p2";
         char base_src_dir[] = "/media/zoey/DATA/SOURCE";
         char *base_dst_dir = "/home/zoey/Desktop/dest";
-        os_sep = '/';
+        char dev_path[] = "/dev/nvme0n1p2"; // TODO: can we get dev_path programatically? or figure out how to not need it at all?
+        os_sep = '/';                       // TODO: can we get os seperator programatically?
+        long target_time_mins = 60;
+        long target_item_count = 1347375;
 
         /* ---- figure out the deepest directory in the source dir path ---- */
-        char src_dir_parent[1000];
         size_t last_char_index = 0;
         for (size_t letter_index = 0; letter_index < strlen(base_src_dir); letter_index++) {
                 //  if we are an os seperator, mark our position
                 if (base_src_dir[letter_index] == os_sep)
                         last_char_index = letter_index;
         }
+        char src_dir_parent[1000];
         strncpy(src_dir_parent, base_src_dir, last_char_index);
 
-        /* ---- Figure out how many items we will be processing ---- */
+        // figure out how many items we will be processing
         long total_items = 0;
         calc_dir_items(base_src_dir, &total_items);
-
-        /* ---- itterate through every file in src dir and subdirs ---- */
         printf("Copying %ld Items from \033[34m%s\033[0m to \033[35m%s\033[0m\n", total_items, base_src_dir, base_dst_dir);
+
+        // itterate through source dir and its subdirectories, and copy any item you find
         long items_progress = 0;
         long time_taken = 0;
         travel_dir(base_src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
         gettimeofday(&total_stop, NULL);
 
         // print stuff on completion
-        long target_time_mins = 60;
-        long target_item_count = 1347375;
-
         printf("\n");
         double total_time_usec = (double)((total_stop.tv_sec * 1000000 + total_stop.tv_usec) - (total_start.tv_sec * 1000000 + total_start.tv_usec));
         double usec_per_item = total_time_usec / (double)total_items;
         printf("Completed in \033[94m%f\033[0ms at \033[94m%f\033[0ms/i\n", total_time_usec / 1000000, usec_per_item / 1000000);
+
         double usec_per_item_target = ((double)target_time_mins * 60 * 1000000) / (double)target_item_count;
         double sec_per_item_dif = (usec_per_item - usec_per_item_target) / 1000000;
         printf("The program is running \033[%im%f\033[0ms %s of the target speed [\033[94m%f\033[0ms/i] \n", sec_per_item_dif >= 0 ? 31 : 32, sec_per_item_dif, sec_per_item_dif >= 0 ? "behind" : "ahead", usec_per_item_target / 1000000);
-
         printf("\033[93m%ld\033[0m items would be completed in \033[31m", target_item_count);
         print_seconds(((total_time_usec / (double)total_items) * (double)target_item_count) / 1000000);
         printf("\033[0m. The target time to complete is \033[93m");
