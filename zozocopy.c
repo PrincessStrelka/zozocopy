@@ -331,13 +331,11 @@ void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base
 
                         // ---- DEBUGFS STAT COPY ----
                         // COPY CTIME
-
                         debugfs_copy_time(target_c_time, dst_path, dev_path, get_stx_ctime);
 
                         // COPY CRTIME
                         debugfs_copy_time(target_b_time, dst_path, dev_path, get_stx_btime);
 
-                        // ---- DEBUGFS STAT COPY ----
                         add_profiling(&debugfs_profile, &prof_stop, &prof_start);
                         printf("]\n");
                 } else {
@@ -416,7 +414,8 @@ int main() {
         printf("\033[0m\n");
 
         printf("Done! 🎉\n\n");
-        // system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
+        system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
+        printf("\n");
 
         printf("%s: %f\n", get_stats_profile.label, ((double)get_stats_profile.total_usec / get_stats_profile.count) / 1000000);
         printf("%s: %f\n", timecopy_profile.label, ((double)timecopy_profile.total_usec / timecopy_profile.count) / 1000000);
