@@ -188,7 +188,7 @@ void print_seconds(double seconds) {
         printf("%dh %dm %fs", hour, mins, seconds - mins * 60);
 }
 
-void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long *items_progress, long total_items, char *dev_path, long *time_taken) {
+void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base_dst_dir[], long *items_progress, long total_items, char *dev_path, long *time_taken) {
         // ensure that src_dir has an os seperator on the end
         ensureOsSeperator(src_dir);
 
@@ -197,187 +197,123 @@ void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long
         sprintf(dst_dir, "%s%s", base_dst_dir, src_dir + (strlen(src_dir_parent) - 1));
 
         // ensure the dst directory exists
-        // itterate over every letter of dst_dir
-        char dst_dir_chunk[COUNT(dst_dir)];
-        bool dir_been_made = false;
-        for (size_t letter_index = 0; letter_index < (COUNT(dst_dir)); letter_index++) {
-                // if we arent at an os seperator or the end of dst_dir, skip this loop
-                if (dst_dir[letter_index] != os_sep && letter_index != COUNT(dst_dir) - 1)
-                        continue;
-                // copy everything before and including character into the temporary path
-                strncpy(dst_dir_chunk, dst_dir, letter_index + 1);
-                // and then add a null terminator to avoid reading junk data as part of the path
-                dst_dir_chunk[letter_index + 1] = '\0';
-                // try to create a directory using temp_path, and set if a dir has been made
-                if (mkdir(dst_dir_chunk, S_IRWXU | S_IRWXG | S_IRWXO) != -1)
-                        dir_been_made = true;
-        }
+        mkdir(dst_dir, S_IRWXU | S_IRWXG | S_IRWXO);
 
-        // TODO: copy over src dir times to dst dir
-        struct dirent *dp;
+        // itterate through src dir directory
         DIR *opened_src_dir = opendir(src_dir); // returns DIR struct upon success, NULL upon failure
-        char *file_name;                        // the variable for the current file
-        char src_file_path[255];                // the variable to store the file name + file path
         if (!opened_src_dir)                    // if sourcedir is not a directory, exit
                 return;
-        struct stat forps;
-        while ((dp = readdir(opened_src_dir)) != NULL) {
-
-                // get the file name from dp
-                file_name = dp->d_name;
-
-                // if we are on a refrence to the current(.) or parent(..)
-                // directory, skip this loop
-                if (strcmp(file_name, ".") == 0 || strcmp(file_name, "..") == 0)
-                        continue;
+        struct dirent *src_dirent;
+        while ((src_dirent = readdir(opened_src_dir)) != NULL) {
+                // get the file name from dp // the variable for the current file
+                char *file_name = src_dirent->d_name;
 
                 // concatonate the source path and file name together into a new variable
-                sprintf(src_file_path, "%s%s", src_dir, file_name);
+                char src_path[255];
+                sprintf(src_path, "%s%s", src_dir, file_name);
 
-                // start timer for the processing time of the loop
-                struct timeval stop, start;
-                gettimeofday(&start, NULL);
+                // if we are on a refrence to the current(.) or parent(..) directory, or if we are unable to get stat from the filepath. skip this loop
+                struct stat src_path_stat;
+                if (strcmp(file_name, ".") == 0 || strcmp(file_name, "..") == 0 || stat(src_path, &src_path_stat) != 0)
+                        continue;
 
-                // find if the filepath is a directory or not
-                if (stat(src_file_path, &forps) == 0) {
-                        // update and output item progress
-                        *items_progress += 1;
-                        double percent_done = (double)*items_progress / (double)total_items;
-                        int progress_bar_total = 20;
-                        int bar_filled = progress_bar_total * percent_done;
-                        int bar_unfilled = progress_bar_total - bar_filled;
+                // update and output item progress
+                *items_progress += 1;
 
-                        // print progress bar
-                        printf("[\033[33m%.*s\033[0m%.*s] ", bar_filled, "####################", bar_unfilled, "--------------------");
-                        // print percentage done
-                        printf("[%6.2f%] ", percent_done * 100.0);
-                        // print amount done
-                        printf("[%ld/%ld] ", *items_progress, total_items);
+                // print percentage done
+                double percent_done = (double)*items_progress / (double)total_items;
+                printf("[%6.2f%] ", percent_done * 100.0);
 
-                        // OUTPUT IF A DIR HAS BEEN MADE
-                        if (dir_been_made) {
-                                printf("[\033[32mD\033[0m] ");
-                                dir_been_made = false;
-                        } else
-                                printf("[\033[30mD\033[0m] ");
+                // print progress bar
+                int bar_filled = 30 * percent_done;
+                printf("[\033[33m%.*s\033[0m\033[3m%.*s\033[0m] ", bar_filled, "########################################", 30 - bar_filled, "----------------------------------------");
 
-                        // determine what the item is
-                        if (forps.st_mode & __S_IFDIR) {
-                                // its a directory
-                                printf("[Dir] ");
+                // determine what the item is
+                if (src_path_stat.st_mode & __S_IFDIR) {
+                        // its a directory
 
-                                // print eta
-                                gettimeofday(&stop, NULL);
-                                *time_taken += (stop.tv_sec * 1000000 + stop.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
-                                double seconds = (((*time_taken / (double)*items_progress) * total_items) - *time_taken) / 1000000;
-                                int hour = seconds / 3600;
-                                seconds -= hour * 3600;
-                                int mins = seconds / 60;
-                                printf("[\033[94meta: %d:%d:%.2f\033[0m] ", hour, mins, seconds - mins * 60);
-                                gettimeofday(&start, NULL);
+                        // TODO: copy over src dir times to dst dir
 
-                                // travel the directory
-                                printf("\n");
-                                travel_dir(src_file_path, src_dir_parent, base_dst_dir, items_progress, total_items, dev_path, time_taken);
-                        } else if (forps.st_mode & __S_IFREG) {
-                                // its a file
-                                printf("[Fil] ");
+                        // print where we are reletively
+                        printf("[\033[36m%s\033[0m]\n", src_dir + (strlen(src_dir_parent) - 1));
 
-                                // generate dst_file_path
-                                char dst_path[255];
-                                sprintf(dst_path, "%s%s", base_dst_dir, src_file_path + (strlen(src_dir_parent) - 1));
+                        // go into the directory in source path
+                        travel_directory_and_clone(src_path, src_dir_parent, base_dst_dir, items_progress, total_items, dev_path, time_taken);
+                } else if (src_path_stat.st_mode & __S_IFREG) {
+                        // its a file
+                        // generate dst_file_path
+                        char dst_path[255];
+                        sprintf(dst_path, "%s%s", base_dst_dir, src_path + (strlen(src_dir_parent) - 1));
 
-                                /* ----- copy file ----- */
-                                // get the file directories of the source and destination paths
-                                int src_fd, dst_fd;
-                                if ((src_fd = open(src_file_path, O_RDONLY)) == -1)
-                                        printf("Error creating source File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
-                                if ((dst_fd = open(dst_path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) == -1)
-                                        printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+                        /* ----- copy file ----- */
+                        // get the file directories of the source and destination paths
+                        int src_fd, dst_fd;
+                        if ((src_fd = open(src_path, O_RDONLY)) == -1)
+                                printf("Error creating source File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
+                        if ((dst_fd = open(dst_path, O_CREAT | O_WRONLY | O_TRUNC, 0644)) == -1)
+                                printf("Error creating destination File Descriptor: \033[31m%s\033[0m\n", strerror(errno));
 
-                                // get the filesize of src_fd
-                                struct stat src_stat;
-                                if ((fstat(src_fd, &src_stat)) == -1) // TODO: is it better to use stat or fstat here?
-                                        printf("Error getting source file stat: \033[31m%s\033[0m\n", strerror(errno));
+                        // copy all the bytes from the source file to the destination file
+                        off_t copy_start_point = 0;
+                        while (copy_start_point < src_path_stat.st_size)
+                                if (sendfile(dst_fd, src_fd, &copy_start_point, LONG_MAX) == -1)
+                                        break;
+                        close(src_fd);
 
-                                // copy all the bytes from the source file to the destination file
-                                size_t byte_buf_size = LONG_MAX;
-                                off_t copy_start_point = 0;
-                                while (copy_start_point < src_stat.st_size) {
-                                        if (sendfile(dst_fd, src_fd, &copy_start_point, byte_buf_size) == -1)
-                                                break;
-                                }
-                                close(src_fd);
+                        /* ----- get the file stats ----- */
+                        // get stats of source file from statx
+                        struct statx src_stxBuf;
+                        if (statx(AT_FDCWD, src_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &src_stxBuf))
+                                printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
+                        unsigned int stx_mask = src_stxBuf.stx_mask;
 
-                                /* ----- get the file stats ----- */
-                                // get stats of source file from statx
-                                struct statx src_stxBuf;
-                                if (statx(AT_FDCWD, src_file_path, AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC, STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE, &src_stxBuf))
-                                        printf("Error getting statx of source file: \033[31m%s\033[0m\n", strerror(errno));
-                                unsigned int stx_mask = src_stxBuf.stx_mask;
+                        // get all the times of the source file in our custom struct. mark how many need to be fixed and what timestamp is the lowest
+                        printf("[Fix: ");
+                        struct ext4_time target_a_time, target_m_time, target_c_time, target_b_time;
+                        struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
+                        size_t ts_fix_index = 0;
+                        struct ext4_time *ts_to_fix[4] = {};
+                        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_a_time, src_stxBuf.stx_atime, STATX_ATIME, "a");
+                        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_m_time, src_stxBuf.stx_mtime, STATX_MTIME, "m");
+                        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_c_time, src_stxBuf.stx_ctime, STATX_CTIME, "c");
+                        fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_b_time, src_stxBuf.stx_btime, STATX_BTIME, "cr");
+                        printf("]");
 
-                                // get all the times of the source file in our custom struct. mark how many need to be fixed and what timestamp is the lowest
-                                printf("[Fix: ");
-                                struct ext4_time target_a_time, target_m_time, target_c_time, target_b_time;
-                                struct ext4_time lowest_time = {.ns_epoch = INT64_MAX};
-                                size_t ts_fix_index = 0;
-                                struct ext4_time *ts_to_fix[4] = {};
-                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_a_time, src_stxBuf.stx_atime, STATX_ATIME, "a");
-                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_m_time, src_stxBuf.stx_mtime, STATX_MTIME, "m");
-                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_c_time, src_stxBuf.stx_ctime, STATX_CTIME, "c");
-                                fill_in_time(&ts_to_fix, &ts_fix_index, &lowest_time, stx_mask, &target_b_time, src_stxBuf.stx_btime, STATX_BTIME, "cr");
-                                printf("]");
-
-                                // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
-                                for (size_t i = 0; i < ts_fix_index; i++) {
-                                        struct ext4_time *timestamp_to_fix = ts_to_fix[i];
-                                        timestamp_to_fix->statx_time = lowest_time.statx_time;
-                                        timestamp_to_fix->epoch = lowest_time.epoch;
-                                        timestamp_to_fix->extra = lowest_time.extra;
-                                        timestamp_to_fix->ns_epoch = lowest_time.ns_epoch;
-                                }
-
-                                /* ---- write the file stats ---- */
-                                printf(" [Set: ");
-                                // COPY ATIME and COPY MTIME
-                                struct timespec atime_mtime[2];
-                                // set up atime
-                                atime_mtime[0].tv_sec = src_stxBuf.stx_atime.tv_sec;
-                                atime_mtime[0].tv_nsec = src_stxBuf.stx_atime.tv_nsec;
-                                // set up mtime
-                                atime_mtime[1].tv_sec = src_stxBuf.stx_mtime.tv_sec;
-                                atime_mtime[1].tv_nsec = src_stxBuf.stx_mtime.tv_nsec;
-                                //  put the new times in the file directed to be dst fd
-                                printf("\033[92m%s\033[0m ", target_a_time.field);
-                                printf("\033[92m%s\033[0m ", target_m_time.field);
-                                // TODO: is utimensat or futimens faster?
-                                futimens(dst_fd, atime_mtime);
-                                close(dst_fd);
-
-                                // COPY CTIME
-                                debugfs_copy_time(target_c_time, dst_path, dev_path, get_stx_ctime);
-
-                                // COPY CRTIME
-                                debugfs_copy_time(target_b_time, dst_path, dev_path, get_stx_btime);
-                                printf("] ");
-
-                                // print eta
-                                // gettimeofday(&stop, NULL);
-                                //*time_taken += (stop.tv_sec * 1000000 + stop.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
-                                // double seconds = (((*time_taken / (double)*items_progress) * total_items) - *time_taken) / 1000000;
-                                // int hour = seconds / 3600;
-                                // seconds -= hour * 3600;
-                                // int mins = seconds / 60;
-                                // printf("[\033[94meta: %d:%d:%.2f\033[0m] ", hour, mins, seconds - mins * 60);
-                                // gettimeofday(&start, NULL);
-
-                                printf("\n");
-                        } else {
-                                printf("%s | it's a something else \n", src_file_path);
+                        // if a timestamp is empty, give it the timestamp of the lowest filled timestamp
+                        for (size_t i = 0; i < ts_fix_index; i++) {
+                                struct ext4_time *timestamp_to_fix = ts_to_fix[i];
+                                timestamp_to_fix->statx_time = lowest_time.statx_time;
+                                timestamp_to_fix->epoch = lowest_time.epoch;
+                                timestamp_to_fix->extra = lowest_time.extra;
+                                timestamp_to_fix->ns_epoch = lowest_time.ns_epoch;
                         }
 
+                        // ---- write the file stats ----
+                        printf(" [Set: ");
+                        // COPY ATIME and COPY MTIME
+                        struct timespec atime_mtime[2];
+                        // set up atime
+                        atime_mtime[0].tv_sec = src_stxBuf.stx_atime.tv_sec;
+                        atime_mtime[0].tv_nsec = src_stxBuf.stx_atime.tv_nsec;
+                        // set up mtime
+                        atime_mtime[1].tv_sec = src_stxBuf.stx_mtime.tv_sec;
+                        atime_mtime[1].tv_nsec = src_stxBuf.stx_mtime.tv_nsec;
+                        //  put the new times in the file directed to be dst fd
+                        printf("\033[92m%s\033[0m ", target_a_time.field);
+                        printf("\033[92m%s\033[0m ", target_m_time.field);
+                        // TODO: is utimensat or futimens faster?
+                        futimens(dst_fd, atime_mtime);
+                        close(dst_fd);
+
+                        // COPY CTIME
+                        debugfs_copy_time(target_c_time, dst_path, dev_path, get_stx_ctime);
+
+                        // COPY CRTIME
+                        debugfs_copy_time(target_b_time, dst_path, dev_path, get_stx_btime);
+
+                        printf("]\n");
                 } else {
-                        printf("%s | unable to get stat \n", src_file_path);
+                        printf("%s | it's a something else \n", src_path);
                 }
         }
         closedir(opened_src_dir); // closes the sourceDir DIR struct
@@ -405,6 +341,26 @@ int main() {
         char src_dir_parent[1000];
         strncpy(src_dir_parent, base_src_dir, last_char_index);
 
+        // create the dest dir inside the dest dir base
+        char dst_dir[100];
+        sprintf(dst_dir, "%s%s", base_dst_dir, base_src_dir + (strlen(src_dir_parent) - 1));
+
+        // ensure that dest dir and all its parent directories exist
+        char dst_dir_chunk[COUNT(dst_dir)];
+        for (size_t letter_index = 0; letter_index < (COUNT(dst_dir)); letter_index++) {
+                // if we arent at an os seperator or the end of dst_dir, skip this loop
+                if (dst_dir[letter_index] != os_sep && letter_index != COUNT(dst_dir) - 1)
+                        continue;
+                // copy everything before and including character into the temporary path
+                strncpy(dst_dir_chunk, dst_dir, letter_index + 1);
+                // and then add a null terminator to avoid reading junk data as part of the path
+                dst_dir_chunk[letter_index + 1] = '\0';
+                // try to create a directory using temp_path, and set if a dir has been made
+                if (mkdir(dst_dir_chunk, S_IRWXU | S_IRWXG | S_IRWXO) != -1) {
+                        printf("DIRECTORY HAS BEEN MADE %s\n", dst_dir_chunk);
+                }
+        }
+
         // figure out how many items we will be processing
         long total_items = 0;
         calc_dir_items(base_src_dir, &total_items);
@@ -413,7 +369,7 @@ int main() {
         // itterate through source dir and its subdirectories, and copy any item you find
         long items_progress = 0;
         long time_taken = 0;
-        travel_dir(base_src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
+        travel_directory_and_clone(base_src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
         gettimeofday(&total_stop, NULL);
 
         // print stuff on completion
@@ -432,6 +388,6 @@ int main() {
         printf("\033[0m\n");
 
         printf("Done! 🎉\n\n");
-        // system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
+        system("stat /home/zoey/Desktop/dest/SOURCE/test.png");
         return 0;
 }
