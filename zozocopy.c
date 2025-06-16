@@ -34,213 +34,18 @@ struct ext4_time {
         signed long long ns_epoch;
 };
 
-// my global variables
-char os_sep = '/';
+char os_sep;
 
-void gfgAddChar(char *s, char c) {
-        // https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
-        while (*s++)
-                ;     // Move pointer to the end
-        *(s - 1) = c; // Append the new character
-        *s = '\0';    // Add null terminator to mark new end
-}
-void gfgIntToStr(int N, char *str) {
-        // https:www.geeksforgeeks.org/how-to-convert-an-integer-to-a-string-in-c/
-        int i = 0;
-
-        // Save the copy of the number for sign
-        int sign = N;
-
-        // If the number is negative, make it positive
-        if (N < 0)
-                N = -N;
-
-        // Extract digits from the number and add them to the
-        // string
-        while (N > 0) {
-
-                // Convert integer digit to character and store
-                // it in the str
-                str[i++] = N % 10 + '0';
-                N /= 10;
-        }
-
-        // If the number was negative, add a minus sign to the
-        // string
-        if (sign < 0) {
-                str[i++] = '-';
-        }
-
-        // Null-terminate the string
-        str[i] = '\0';
-
-        // Reverse the string to get the correct order
-        for (int j = 0, k = i - 1; j < k; j++, k--) {
-                char temp = str[j];
-                str[j] = str[k];
-                str[k] = temp;
-        }
-}
-void bitwisePrint(int var) {
-        int var_copy = var;                                            // copy the input into a modifyable variable
-        int mask_size = sizeof(var) * 8;                               // get the amount of bits in the input variable
-        for (size_t bit = 0; bit < mask_size; bit++) {                 // itterate through every bit in the input variable
-                bool is_one = var_copy & 1 << (mask_size - 1);         // check if the highest bit is one
-                printf("\033[%im%u\033[0m", is_one ? 97 : 30, is_one); // print the bit
-                var_copy = var_copy << 1;                              // put the next bit into the highest bit
-        }
-}
 void ensureOsSeperator(char *s) {
         if (s[strlen(s) - 1] != os_sep) {
-                gfgAddChar(s, os_sep);
+                // https://www.geeksforgeeks.org/how-to-append-a-character-to-a-string-in-c/
+                while (*s++)
+                        ;          // Move pointer to the end
+                *(s - 1) = os_sep; // Append the new character
+                *s = '\0';         // Add null terminator to mark new end
         }
 }
-void printTime(char label[], unsigned int mask, unsigned int maskConst, struct statx_timestamp timestamp) {
-        if (mask & maskConst) {
-                // get times from timestamp
-                signed long long tv_epoch = timestamp.tv_sec;
-                unsigned int tv_nsec = timestamp.tv_nsec;
 
-                // get times for set inode field
-                long long adjusted = tv_epoch + 2147483648;
-                signed long long sif_time = (adjusted % 4294967296) - 2147483648;
-
-                // shift it over by two bits
-                // store the multiplier in the lower two bits
-                unsigned int sif_extra = (tv_nsec << 2) + floor(adjusted / 4294967296);
-
-                // get epoch as a formatted string
-                struct tm tm;
-                char dateStr[255];
-                char epochAsstr[10];
-                gfgIntToStr(timestamp.tv_sec, epochAsstr);
-                memset(&tm, 0, sizeof(struct tm));
-                strptime(epochAsstr, "%s", &tm);
-                strftime(dateStr, sizeof(dateStr), "%Y-%m-%d %H:%M:%S", &tm);
-
-                // print time data
-                printf("%s: %s.%u | %lld %u\n", label, dateStr, tv_nsec, sif_time, sif_extra);
-
-        } else
-                printf("%s: -\n", label);
-}
-void replaceFirstInstance(char *src_string, char *substring, char *replacement) {
-        char const *substring_position = strstr(src_string, substring);
-        if (substring_position) {
-                // find the index of the substring match
-                int matchindex = substring_position - src_string;
-
-                // get everything from before the substring
-                char modifiedString[255] = "";
-                strncpy(modifiedString, src_string, matchindex);
-
-                // get everything from after the substring
-                char lastPart[255] = "";
-                strncpy(lastPart, src_string + matchindex + strlen(substring), strlen(src_string));
-
-                // concatinate first part of string, replacement, and last part of string
-                strcat(modifiedString, replacement);
-                strcat(modifiedString, lastPart);
-
-                // put the modified string into string
-                strcpy(src_string, modifiedString);
-        }
-}
-void copyPath(char src_path[], char *baseFolder, char *destFolder) {
-        printf("\033[34m%s\033[0m\n", src_path);
-        /* ---- CREATE NEW FILE PATH ---- */
-        // ensure basefolder does not end with os sep
-        char copyBaseFolder[1000];
-        strcpy(copyBaseFolder, baseFolder);
-        if ((copyBaseFolder[strlen(copyBaseFolder) - 1]) == '/')
-                copyBaseFolder[strlen(copyBaseFolder) - 1] = '\0';
-
-        // get the source path base
-        char *lastOsSepIndex = strrchr(copyBaseFolder, os_sep);
-        char *sourcePathBase = lastOsSepIndex ? lastOsSepIndex + 1 : copyBaseFolder;
-
-        // create a modified base path
-        char modifiedBaseFolder[1000];
-        time_t t = time(NULL);
-        struct tm tm = *localtime(&t);
-        sprintf(modifiedBaseFolder, "%s%s-%d-%02d-%02d_%02d.%02d.%02d", destFolder, sourcePathBase, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-
-        // swap out the base path in the filepath for the modified base path
-        char dst_path[1000] = "";
-        strcpy(dst_path, src_path);
-        replaceFirstInstance(dst_path, copyBaseFolder, modifiedBaseFolder);
-        printf("\033[35m%s\033[0m\n", dst_path);
-
-        /* ---- GET BASE FILE STATS ---- */
-        // fill in the parameters for statx call, and call it
-        struct statx src_stxBuf;
-
-        // print the file we are statting, and the return code from calling statx
-        int src_statx_err = statx(AT_FDCWD,
-                                  src_path,
-                                  AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_SYMLINK_NOFOLLOW | AT_STATX_FORCE_SYNC,
-                                  STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_DIOALIGN | STATX_MNT_ID_UNIQUE,
-                                  &src_stxBuf);
-        printf("statx result: %i\n", src_statx_err);
-        if (src_statx_err < 0)
-                return;
-
-        // print the stx mask result
-        printf("stx_mask: ");
-        bitwisePrint(src_stxBuf.stx_mask);
-        printf("\n");
-
-        // if the stx buffer contains a time, print the time, else dont
-        printTime("aTime        (Access)", src_stxBuf.stx_mask, STATX_ATIME, src_stxBuf.stx_atime);
-        printTime("mTime        (Modify)", src_stxBuf.stx_mask, STATX_MTIME, src_stxBuf.stx_mtime);
-        printTime("cTime        (Change)", src_stxBuf.stx_mask, STATX_CTIME, src_stxBuf.stx_ctime);
-        printTime("crTime/bTime (Birth )", src_stxBuf.stx_mask, STATX_BTIME, src_stxBuf.stx_btime);
-
-        /* ---- COPY FILE ---- */
-
-        /*
-        int byte_count, src_fd, dst_fd, copy_ret;
-        byte_count = 4096; // how big does this need to be?
-        unsigned char copy_buf[byte_count];
-
-        // get file descriptors
-        src_fd = open(src_path, O_RDONLY);                                         // get file descriptor from src path as read only
-        dst_fd = open(dst_path, O_WRONLY | O_CREAT | O_EXCL | O_NOATIME, S_IRWXU); // get file descriptor from src path as write only, possibly create dir
-        if (src_fd == -1 || dst_fd == -1)
-                printf("Error getting File Descriptor.\n");
-
-        close(src_fd);
-        close(dst_fd);*/
-}
-
-void epochToString(char *dateStr, signed long long epoch) {
-        struct tm tm;
-        char epochAsstr[10];
-        memset(&tm, 0, sizeof(struct tm));
-        gfgIntToStr(epoch, epochAsstr);
-        strptime(epochAsstr, "%s", &tm);
-        strftime(dateStr, 255, "%Y-%m-%d %H:%M:%S", &tm);
-}
-void printStxTime(char *label, struct statx_timestamp stx_time) {
-        char dateStr[255];
-        char buffer[254] = "-";
-        epochToString(&dateStr, stx_time.tv_sec);
-        if (stx_time.tv_sec != 0)
-                sprintf(buffer, "%s.%u", dateStr, stx_time.tv_nsec);
-        printf("%s: %s \n", label, buffer);
-}
-void printExt4Time(struct ext4_time *ext4_time) {
-        // get epoch as a formatted string
-        char dateStr[255];
-        epochToString(&dateStr, ext4_time->statx_time.tv_sec);
-        printf("%s %s: %s.%u | %lld %llu | %lld", ext4_time->field, ext4_time->field, dateStr, ext4_time->statx_time.tv_nsec, ext4_time->epoch, ext4_time->extra, ext4_time->ns_epoch);
-}
-void get_stx_btime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
-        *dst_stx_time = dst_stxBuf->stx_btime;
-}
-void get_stx_ctime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
-        *dst_stx_time = dst_stxBuf->stx_ctime;
-}
 void fill_in_time(struct ext4_time *ts_to_fix[], size_t *times_to_fix_index, struct ext4_time *lowest_time, unsigned int stx_mask, struct ext4_time *target_time, struct statx_timestamp stx_time, unsigned int mask_const, char ino_field[]) {
         // put inode field in struct
         strcpy(target_time->field, ino_field);
@@ -271,6 +76,7 @@ void fill_in_time(struct ext4_time *ts_to_fix[], size_t *times_to_fix_index, str
         // print that this timestamp is bad
         printf("\033[31m%s\033[0m ", target_time->field);
 }
+
 void calc_dir_items(char src_dir[], long *total_files) {
         ensureOsSeperator(src_dir);
         // printf("%s\n", src_dir);
@@ -313,6 +119,12 @@ void calc_dir_items(char src_dir[], long *total_files) {
         closedir(opened_src_dir); // closes the sourceDir DIR struct
 }
 
+void get_stx_btime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
+        *dst_stx_time = dst_stxBuf->stx_btime;
+}
+void get_stx_ctime(struct statx_timestamp *dst_stx_time, struct statx *dst_stxBuf) {
+        *dst_stx_time = dst_stxBuf->stx_ctime;
+}
 void debugfs_copy_time(struct ext4_time target_time, char *dst_path, char *dev_path, void (*get_current_target_time_in_stx)(struct statx_timestamp *, struct statx *)) {
         // get stats of src time for calling debugfs
         // get inode of dst file
@@ -377,10 +189,10 @@ void print_seconds(double seconds) {
 }
 
 void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long *items_progress, long total_items, char *dev_path, long *time_taken) {
-        clock_t start;
-        clock_t end;
+        // ensure that src_dir has an os seperator on the end
         ensureOsSeperator(src_dir);
-        // swap out src_dir_parent in src_dir with base_dst_dir /media/zoey/DATA
+
+        // generate dst_dir by swapping src_dir_parent in src_dir with base_dst_dir
         char dst_dir[100];
         sprintf(dst_dir, "%s%s", base_dst_dir, src_dir + (strlen(src_dir_parent) - 1));
 
@@ -574,38 +386,33 @@ void travel_dir(char src_dir[], char src_dir_parent[], char base_dst_dir[], long
 int main() {
         struct timeval total_stop, total_start;
         gettimeofday(&total_start, NULL);
-        clock_t program_start = clock();
 
         /* ---- ARGS ---- */
         // TODO: can we get dev_path programatically? or figure out how to not need it at all?
         char dev_path[] = "/dev/nvme0n1p2";
-        char src_dir[] = "/media/zoey/DATA/SOURCE";
+        char base_src_dir[] = "/media/zoey/DATA/SOURCE";
         char *base_dst_dir = "/home/zoey/Desktop/dest";
+        os_sep = '/';
 
-        /* ---- figure out the source dir parent ---- */
+        /* ---- figure out the deepest directory in the source dir path ---- */
         char src_dir_parent[1000];
         size_t last_char_index = 0;
-        for (size_t letter_index = 0; letter_index < strlen(src_dir); letter_index++) {
+        for (size_t letter_index = 0; letter_index < strlen(base_src_dir); letter_index++) {
                 //  if we are an os seperator, mark our position
-                if (src_dir[letter_index] == os_sep)
+                if (base_src_dir[letter_index] == os_sep)
                         last_char_index = letter_index;
         }
-        strncpy(src_dir_parent, src_dir, last_char_index);
-
-        /* ---- ensure src dir top in dst dir exists ---- */
-        printf("\033[34m%s\033[0m\n", src_dir);
-        printf("%s\n", src_dir_parent);
-        printf("\033[35m%s\033[0m\n", base_dst_dir);
+        strncpy(src_dir_parent, base_src_dir, last_char_index);
 
         /* ---- Figure out how many items we will be processing ---- */
         long total_items = 0;
-        calc_dir_items(src_dir, &total_items);
+        calc_dir_items(base_src_dir, &total_items);
 
         /* ---- itterate through every file in src dir and subdirs ---- */
-        printf("%ld Items\n", total_items);
+        printf("Copying %ld Items from \033[34m%s\033[0m to \033[35m%s\033[0m\n", total_items, base_src_dir, base_dst_dir);
         long items_progress = 0;
         long time_taken = 0;
-        travel_dir(src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
+        travel_dir(base_src_dir, src_dir_parent, base_dst_dir, &items_progress, total_items, dev_path, &time_taken);
         gettimeofday(&total_stop, NULL);
 
         // print stuff on completion
