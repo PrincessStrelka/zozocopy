@@ -330,11 +330,12 @@ void travel_directory_and_clone(char src_dir[], char src_dir_parent[], char base
                         add_profiling(&timecopy_profile, &prof_stop, &prof_start);
 
                         // ---- DEBUGFS STAT COPY ----
+                        // sudo debugfs -w -R 'set_inode_field <DESTINATION_INODE> crtime @0xEPOCH' DEV_PATH
+                        // sudo debugfs -w -R 'set_inode_field <DESTINATION_INODE> crtime_extra 0x%EXTRA' DEV_PATH
+
                         // COPY CTIME
-                        debugfs_copy_time(target_c_time, dst_path, dev_path, get_stx_ctime);
 
                         // COPY CRTIME
-                        debugfs_copy_time(target_b_time, dst_path, dev_path, get_stx_btime);
 
                         add_profiling(&debugfs_profile, &prof_stop, &prof_start);
                         printf("]\n");

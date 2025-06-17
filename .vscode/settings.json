@@ -4,6 +4,8 @@
                 "stdint.h": "c",
                 "cstdlib": "c",
                 "stat.h": "c",
-                "module.h": "c"
+                "module.h": "c",
+                "functional": "c",
+                "utime.h": "c"
         }
 }
