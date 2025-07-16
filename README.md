@@ -1,4 +1,4 @@
-# ZoZoCopy, C version
+# ZoZoCopy
 
 have you ever wanted to copy files on an ext4 drive whilst preserving the timestamps? well, i sure did, but every fourum on the internet i could find said that was entirely impossible (unless you use macOS)....
 but instead of giving up , i just took that as a challange to make a tool myself!!!!
